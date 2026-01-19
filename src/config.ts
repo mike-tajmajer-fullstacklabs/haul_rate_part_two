@@ -11,7 +11,8 @@ const __dirname = dirname(__filename);
 
 // Environment schema
 const EnvSchema = z.object({
-  TOMTOM_API_KEY: z.string().min(1, 'TOMTOM_API_KEY is required'),
+  TOMTOM_API_KEY: z.string().optional(),
+  HERE_API_KEY: z.string().optional(),
   PORT: z.string().default('3000').transform(Number),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CACHE_ENABLED: z.string().default('true').transform((v) => v === 'true'),
@@ -31,6 +32,12 @@ if (!envResult.success) {
 
 const env = envResult.data;
 
+// Validate at least one API key is provided
+if (!env.TOMTOM_API_KEY && !env.HERE_API_KEY) {
+  console.error('At least one API key is required: TOMTOM_API_KEY or HERE_API_KEY');
+  process.exit(1);
+}
+
 // Application configuration
 export const config = {
   // Server
@@ -41,10 +48,22 @@ export const config = {
 
   // TomTom API
   tomtom: {
-    apiKey: env.TOMTOM_API_KEY,
+    apiKey: env.TOMTOM_API_KEY || '',
+    enabled: !!env.TOMTOM_API_KEY,
     baseUrl: 'https://api.tomtom.com',
     geocodingEndpoint: '/search/2/geocode',
     routingEndpoint: '/routing/1/calculateRoute',
+    requestTimeoutMs: 30000,
+  },
+
+  // HERE API
+  here: {
+    apiKey: env.HERE_API_KEY || '',
+    enabled: !!env.HERE_API_KEY,
+    routingBaseUrl: 'https://router.hereapi.com',
+    geocodingBaseUrl: 'https://geocode.search.hereapi.com',
+    searchBaseUrl: 'https://autosuggest.search.hereapi.com',
+    reverseGeocodeBaseUrl: 'https://revgeocode.search.hereapi.com',
     requestTimeoutMs: 30000,
   },
 
@@ -68,6 +87,7 @@ export const config = {
     deliveryDurationMinutes: 15,
     maxTargets: 50,
     countrySet: 'US',
+    defaultProvider: (env.TOMTOM_API_KEY ? 'tomtom' : 'here') as 'tomtom' | 'here',
   },
 } as const;
 

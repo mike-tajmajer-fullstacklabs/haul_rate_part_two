@@ -2,9 +2,10 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { deliveryOptimizer } from '../services/optimizer.js';
 import { holidayService } from '../services/holidays.js';
-import { geocodingService } from '../services/geocoding.js';
+import { providerManager } from '../services/provider-manager.js';
 import { planStore } from '../storage/plan-store.js';
-import { OptimizeRequestSchema, UserHolidaySchema, CoordinatesSchema } from '../types/index.js';
+import { OptimizeRequestSchema, UserHolidaySchema, CoordinatesSchema, RoutingProviderSchema } from '../types/index.js';
+import { RoutingProviderType } from '../services/routing-provider.js';
 
 const router = Router();
 
@@ -240,6 +241,30 @@ router.delete(
   })
 );
 
+// Helper to get provider from query param
+function getProviderFromQuery(req: Request): RoutingProviderType | undefined {
+  const providerParam = req.query.provider as string | undefined;
+  if (providerParam) {
+    const result = RoutingProviderSchema.safeParse(providerParam);
+    if (result.success) {
+      return result.data;
+    }
+  }
+  return undefined;
+}
+
+// GET /api/delivery/providers - Get available routing providers
+router.get('/providers', (req, res) => {
+  const available = providerManager.getAvailableProviders();
+  const defaultProvider = providerManager.getDefaultProvider();
+
+  res.json({
+    success: true,
+    providers: available,
+    default: defaultProvider,
+  });
+});
+
 // POST /api/delivery/reverse-geocode - Reverse geocode coordinates to address
 router.post(
   '/reverse-geocode',
@@ -256,7 +281,9 @@ router.post(
     }
 
     const label = req.body.label as string | undefined;
-    const geocoded = await geocodingService.reverseGeocode(parseResult.data, label);
+    const providerType = getProviderFromQuery(req) || (req.body.provider as RoutingProviderType | undefined);
+    const provider = providerManager.getProvider(providerType);
+    const geocoded = await provider.reverseGeocode(parseResult.data, label);
 
     res.json({
       success: true,
@@ -282,10 +309,12 @@ router.get(
     const lat = req.query.lat ? parseFloat(req.query.lat as string) : undefined;
     const lng = req.query.lng ? parseFloat(req.query.lng as string) : undefined;
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 5;
+    const providerType = getProviderFromQuery(req);
 
     const center = lat !== undefined && lng !== undefined ? { lat, lng } : undefined;
 
-    const results = await geocodingService.searchLocations(query, center, limit);
+    const provider = providerManager.getProvider(providerType);
+    const results = await provider.searchLocations(query, center, limit);
 
     res.json({
       success: true,

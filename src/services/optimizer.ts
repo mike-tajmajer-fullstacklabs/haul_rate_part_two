@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
-import { geocodingService } from './geocoding.js';
-import { tomtomRoutingService } from './tomtom.js';
 import { holidayService } from './holidays.js';
+import { providerManager } from './provider-manager.js';
 import { config } from '../config.js';
 import {
   AddressInput,
@@ -11,12 +10,14 @@ import {
   RouteSegment,
   DeliveryTarget,
 } from '../types/index.js';
+import { RoutingProviderType, IRoutingProvider } from './routing-provider.js';
 
 interface OptimizeOptions {
   depot: AddressInput;
   targets: AddressInput[];
   firstDepartureTime: string;
   deliveryDurationMinutes?: number;
+  provider?: RoutingProviderType;
 }
 
 interface RoundTripRoute {
@@ -33,11 +34,15 @@ export class DeliveryOptimizer {
       targets,
       firstDepartureTime,
       deliveryDurationMinutes = config.defaults.deliveryDurationMinutes,
+      provider: providerType,
     } = options;
+
+    // Get the routing provider
+    const provider = providerManager.getProvider(providerType);
 
     // Step 1: Geocode depot and all targets
     const allAddresses = [depot, ...targets];
-    const geocoded = await geocodingService.geocodeMultiple(allAddresses);
+    const geocoded = await provider.geocodeMultiple(allAddresses);
 
     const depotGeocoded = geocoded.get(depot.address);
     if (!depotGeocoded) {
@@ -59,7 +64,7 @@ export class DeliveryOptimizer {
 
     for (const target of targetAddresses) {
       // Calculate outbound route (depot → target)
-      const outboundRoute = await tomtomRoutingService.calculateRoute({
+      const outboundRoute = await provider.calculateRoute({
         origin: depotGeocoded,
         destination: target,
         departureTime: firstDepartureTime,
@@ -72,7 +77,7 @@ export class DeliveryOptimizer {
       );
 
       // Calculate return route (target → depot)
-      const returnRoute = await tomtomRoutingService.calculateRoute({
+      const returnRoute = await provider.calculateRoute({
         origin: target,
         destination: depotGeocoded,
         departureTime: returnDepartureTime.toISOString(),
@@ -101,7 +106,7 @@ export class DeliveryOptimizer {
       const { target } = roundTripRoutes[i];
 
       // Recalculate outbound route with actual departure time
-      const outboundRoute = await tomtomRoutingService.calculateRoute({
+      const outboundRoute = await provider.calculateRoute({
         origin: depotGeocoded,
         destination: target,
         departureTime: currentDepartureTime.toISOString(),
@@ -116,7 +121,7 @@ export class DeliveryOptimizer {
       );
 
       // Recalculate return route with actual departure time
-      const returnRoute = await tomtomRoutingService.calculateRoute({
+      const returnRoute = await provider.calculateRoute({
         origin: target,
         destination: depotGeocoded,
         departureTime: deliveryEndTime.toISOString(),
@@ -177,6 +182,7 @@ export class DeliveryOptimizer {
     const plan: DeliveryPlan = {
       id: uuidv4(),
       createdAt: new Date().toISOString(),
+      provider: provider.name,
       depot: depotGeocoded,
       firstDepartureTime,
       dayType,

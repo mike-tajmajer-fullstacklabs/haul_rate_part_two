@@ -1,5 +1,7 @@
 const API_BASE = '/api/delivery';
 
+export type RoutingProvider = 'tomtom' | 'here';
+
 export interface AddressInput {
   address: string;
   label?: string;
@@ -10,6 +12,7 @@ export interface OptimizeRequest {
   targets: AddressInput[];
   firstDepartureTime: string;
   deliveryDurationMinutes?: number;
+  provider?: RoutingProvider;
 }
 
 export interface Coordinates {
@@ -56,6 +59,7 @@ export interface OptimizedDelivery {
 export interface DeliveryPlan {
   id: string;
   createdAt: string;
+  provider: RoutingProvider;
   depot: GeocodedAddress;
   firstDepartureTime: string;
   dayType: 'weekday' | 'weekend' | 'holiday';
@@ -128,6 +132,11 @@ export interface SearchLocationsResponse extends ApiResponse {
   results?: LocationSearchResult[];
 }
 
+export interface ProvidersResponse extends ApiResponse {
+  providers?: RoutingProvider[];
+  default?: RoutingProvider;
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...options,
@@ -196,20 +205,26 @@ export const api = {
     return fetchJson<ApiResponse>(`${API_BASE}/health`);
   },
 
+  async getProviders(): Promise<ProvidersResponse> {
+    return fetchJson<ProvidersResponse>(`${API_BASE}/providers`);
+  },
+
   async reverseGeocode(
     coordinates: Coordinates,
-    label?: string
+    label?: string,
+    provider?: RoutingProvider
   ): Promise<ReverseGeocodeResponse> {
     return fetchJson<ReverseGeocodeResponse>(`${API_BASE}/reverse-geocode`, {
       method: 'POST',
-      body: JSON.stringify({ ...coordinates, label }),
+      body: JSON.stringify({ ...coordinates, label, provider }),
     });
   },
 
   async searchLocations(
     query: string,
     center?: Coordinates,
-    limit?: number
+    limit?: number,
+    provider?: RoutingProvider
   ): Promise<SearchLocationsResponse> {
     const params = new URLSearchParams({ q: query });
     if (center) {
@@ -218,6 +233,9 @@ export const api = {
     }
     if (limit) {
       params.set('limit', String(limit));
+    }
+    if (provider) {
+      params.set('provider', provider);
     }
     return fetchJson<SearchLocationsResponse>(
       `${API_BASE}/search-locations?${params.toString()}`

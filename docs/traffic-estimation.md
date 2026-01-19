@@ -4,13 +4,36 @@ This document explains how the Traffic Density Forecasting POC estimates and use
 
 ## Overview
 
-The application uses the **TomTom Routing API** to obtain traffic-aware travel time estimates. By specifying a future departure time, TomTom returns predicted travel times based on historical traffic patterns for that time of day and day of week.
+The application supports multiple routing providers for traffic-aware travel time estimates:
+- **TomTom Routing API** - Primary provider
+- **HERE Routing API** - Alternative provider
 
-## Data Source: TomTom Routing API
+Both providers return predicted travel times based on historical traffic patterns when you specify a future departure time. The provider can be selected in the UI before running an optimization.
 
-### API Endpoint
+## Supported Routing Providers
+
+### TomTom
+- Website: https://developer.tomtom.com/
+- Free tier: 2,500 requests/day
+- Provides: Routing, geocoding, traffic, search
+
+### HERE
+- Website: https://developer.here.com/
+- Free tier: 250,000 transactions/month (~8,300/day)
+- Provides: Routing, geocoding, traffic, search
+
+Both providers offer similar capabilities for this POC. You can configure one or both by setting the respective API keys in `.env`.
+
+## Data Source: Routing APIs
+
+### TomTom API Endpoint
 ```
 GET /routing/1/calculateRoute/{origin}:{destination}/json
+```
+
+### HERE API Endpoint
+```
+GET /v8/routes
 ```
 
 ### Key Parameters
@@ -298,6 +321,15 @@ This means:
 | Free | 2,500 requests/day | $0 |
 | Paid | Per 1,000 requests | ~$0.50-0.75 |
 
+### HERE API Pricing
+
+| Tier | Allowance | Cost |
+|------|-----------|------|
+| Free | 250,000 transactions/month (~8,300/day) | $0 |
+| Paid | Per 1,000 transactions | ~$0.49-1.00 |
+
+**Note**: HERE's free tier is significantly more generous than TomTom's, making it a good choice for development and light production use.
+
 ### API Calls Per Optimization
 
 For an optimization with **N delivery targets** (hub-and-spoke round-trip model):
@@ -378,7 +410,9 @@ All calculated at 8:00 AM departure to determine sort order:
 | Recalculated routes | 10 | Accurate timing with actual departures |
 | **Total** | **26** | Complete optimization |
 
-**Cost:** 26 calls × $0.00075 = **$0.020** (or free within daily limit)
+**Cost per provider (26 calls):**
+- **TomTom**: 26 × $0.00075 = **$0.020** (or free within 2,500/day limit)
+- **HERE**: 26 × $0.00049 = **$0.013** (or free within ~8,300/day limit)
 
 **With caching on subsequent runs:**
 - Geocoding: 0 calls (cached)
@@ -387,12 +421,38 @@ All calculated at 8:00 AM departure to determine sort order:
 
 ### Example Cost Calculations
 
-| Scenario | Targets | API Calls (1+5N) | Free Tier Runs/Day | Paid Cost |
-|----------|---------|------------------|-------------------|-----------|
+#### TomTom Costs
+
+| Scenario | Targets | API Calls (1+5N) | Free Tier Runs/Day | Paid Cost/Run |
+|----------|---------|------------------|-------------------|---------------|
 | Small batch | 5 | ~26 | 96/day | $0.020 |
 | Medium batch | 10 | ~51 | 49/day | $0.038 |
 | Large batch | 20 | ~101 | 24/day | $0.076 |
 | Max batch | 50 | ~251 | 9/day | $0.188 |
+
+*TomTom pricing: ~$0.75 per 1,000 requests. Free tier: 2,500 requests/day.*
+
+#### HERE Costs
+
+| Scenario | Targets | API Calls (1+5N) | Free Tier Runs/Day | Paid Cost/Run |
+|----------|---------|------------------|-------------------|---------------|
+| Small batch | 5 | ~26 | 319/day | $0.013 |
+| Medium batch | 10 | ~51 | 162/day | $0.025 |
+| Large batch | 20 | ~101 | 82/day | $0.049 |
+| Max batch | 50 | ~251 | 33/day | $0.123 |
+
+*HERE pricing: ~$0.49 per 1,000 transactions. Free tier: 250,000/month (~8,300/day).*
+
+#### Provider Comparison
+
+| Scenario | TomTom Cost | HERE Cost | HERE Savings |
+|----------|-------------|-----------|--------------|
+| Small batch (5) | $0.020 | $0.013 | 35% |
+| Medium batch (10) | $0.038 | $0.025 | 34% |
+| Large batch (20) | $0.076 | $0.049 | 36% |
+| Max batch (50) | $0.188 | $0.123 | 35% |
+
+**Recommendation**: HERE offers ~35% lower per-request costs and a significantly larger free tier (250,000/month vs 2,500/day), making it more cost-effective for most use cases.
 
 ### Cost Reduction with Caching
 
@@ -406,21 +466,50 @@ Caching significantly reduces costs for repeated operations:
 
 ### Monthly Cost Projections
 
-| Usage Level | Optimizations/Day | Targets/Opt | Monthly Cost |
-|-------------|-------------------|-------------|--------------|
-| Light | 10 | 10 | Free tier sufficient |
-| Moderate | 50 | 10 | ~$30-50 |
-| Heavy | 200 | 15 | ~$200-300 |
+#### TomTom Monthly Costs
+
+| Usage Level | Optimizations/Day | Targets/Opt | API Calls/Day | Monthly Cost |
+|-------------|-------------------|-------------|---------------|--------------|
+| Light | 10 | 10 | ~510 | Free tier sufficient |
+| Moderate | 50 | 10 | ~2,550 | ~$38 |
+| Heavy | 200 | 15 | ~15,200 | ~$342 |
+
+*TomTom free tier: 2,500 requests/day*
+
+#### HERE Monthly Costs
+
+| Usage Level | Optimizations/Day | Targets/Opt | API Calls/Day | Monthly Cost |
+|-------------|-------------------|-------------|---------------|--------------|
+| Light | 10 | 10 | ~510 | Free tier sufficient |
+| Moderate | 50 | 10 | ~2,550 | Free tier sufficient |
+| Heavy | 200 | 15 | ~15,200 | ~$102 |
+
+*HERE free tier: ~8,300 requests/day (250,000/month)*
+
+#### Monthly Cost Comparison
+
+| Usage Level | TomTom | HERE | Savings with HERE |
+|-------------|--------|------|-------------------|
+| Light (10/day) | $0 | $0 | - |
+| Moderate (50/day) | ~$38 | $0 | 100% (free tier) |
+| Heavy (200/day) | ~$342 | ~$102 | 70% |
 
 ### Cost Optimization Tips
 
-1. **Enable caching**: Reduces repeat API calls
-2. **Batch similar deliveries**: Run optimization once for the day
-3. **Reuse depot addresses**: Cached geocoding saves calls
-4. **Avoid unnecessary re-runs**: Only re-optimize when inputs change
+1. **Use HERE for cost savings**: HERE offers lower per-request costs and a larger free tier
+2. **Enable caching**: Reduces repeat API calls
+3. **Batch similar deliveries**: Run optimization once for the day
+4. **Reuse depot addresses**: Cached geocoding saves calls
+5. **Avoid unnecessary re-runs**: Only re-optimize when inputs change
 
 ## References
 
+### TomTom
 - [TomTom Routing API Documentation](https://developer.tomtom.com/routing-api/documentation/routing/calculate-route)
 - [TomTom Traffic Flow](https://developer.tomtom.com/traffic-api/documentation/traffic-flow/raster-flow-tiles)
 - [TomTom Pricing](https://developer.tomtom.com/store/maps-api)
+
+### HERE
+- [HERE Routing API Documentation](https://developer.here.com/documentation/routing-api/dev_guide/index.html)
+- [HERE Geocoding & Search](https://developer.here.com/documentation/geocoding-search-api/dev_guide/index.html)
+- [HERE Pricing](https://www.here.com/platform/pricing)

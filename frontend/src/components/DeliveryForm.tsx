@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { api, AddressInput, Coordinates, GeocodedAddress, OptimizeRequest, LocationSearchResult } from '../api/client';
+import React, { useState, useCallback, useEffect } from 'react';
+import { api, AddressInput, Coordinates, GeocodedAddress, OptimizeRequest, LocationSearchResult, RoutingProvider } from '../api/client';
 import AddressList from './AddressList';
 import MapView, { SelectionMode } from './MapView';
 import LocationSearch from './LocationSearch';
@@ -21,6 +21,10 @@ interface TargetAddress {
 }
 
 const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
+  // Provider state
+  const [availableProviders, setAvailableProviders] = useState<RoutingProvider[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<RoutingProvider | undefined>(undefined);
+
   // Map state
   const [mapCenter, setMapCenter] = useState<Coordinates>(DEFAULT_CENTER);
   const [inputMode, setInputMode] = useState<InputMode>('text');
@@ -33,6 +37,24 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
 
   // Targets state
   const [targets, setTargets] = useState<TargetAddress[]>([{ input: { address: '', label: '' } }]);
+
+  // Fetch available providers on mount
+  useEffect(() => {
+    const fetchProviders = async () => {
+      try {
+        const response = await api.getProviders();
+        if (response.success && response.providers) {
+          setAvailableProviders(response.providers);
+          if (response.default) {
+            setSelectedProvider(response.default);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch providers:', error);
+      }
+    };
+    fetchProviders();
+  }, []);
 
   // Schedule state
   const [departureTime, setDepartureTime] = useState(() => {
@@ -126,6 +148,7 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
       targets: validTargets,
       firstDepartureTime: new Date(departureTime).toISOString(),
       deliveryDurationMinutes: deliveryDuration,
+      provider: selectedProvider,
     };
 
     onSubmit(request);
@@ -138,8 +161,36 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
     .filter((t) => t.geocoded)
     .map((t) => t.geocoded as GeocodedAddress);
 
+  const providerLabels: Record<RoutingProvider, string> = {
+    tomtom: 'TomTom',
+    here: 'HERE',
+  };
+
   return (
     <form onSubmit={handleSubmit} style={styles.form}>
+      {/* Provider selector */}
+      {availableProviders.length > 1 && (
+        <div style={styles.providerSection}>
+          <label style={styles.label}>Routing Provider</label>
+          <div style={styles.providerToggle}>
+            {availableProviders.map((provider) => (
+              <button
+                key={provider}
+                type="button"
+                style={{
+                  ...styles.providerButton,
+                  ...(selectedProvider === provider ? styles.providerButtonActive : {}),
+                }}
+                onClick={() => setSelectedProvider(provider)}
+                disabled={loading}
+              >
+                {providerLabels[provider]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Input mode toggle */}
       <div style={styles.modeToggle}>
         <button
@@ -327,6 +378,30 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '8px',
     padding: '24px',
     boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+  },
+  providerSection: {
+    marginBottom: '16px',
+  },
+  providerToggle: {
+    display: 'flex',
+    gap: '8px',
+  },
+  providerButton: {
+    flex: 1,
+    padding: '10px 16px',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    background: '#fff',
+    color: '#374151',
+    fontSize: '14px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  providerButtonActive: {
+    background: '#2563eb',
+    color: '#fff',
+    borderColor: '#2563eb',
   },
   modeToggle: {
     display: 'flex',

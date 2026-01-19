@@ -4,6 +4,10 @@ import { z } from 'zod';
 export const DayTypeSchema = z.enum(['weekday', 'weekend', 'holiday']);
 export type DayType = z.infer<typeof DayTypeSchema>;
 
+// Routing provider enum
+export const RoutingProviderSchema = z.enum(['tomtom', 'here']);
+export type RoutingProvider = z.infer<typeof RoutingProviderSchema>;
+
 // Coordinates
 export const CoordinatesSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -65,6 +69,7 @@ export type OptimizedDelivery = z.infer<typeof OptimizedDeliverySchema>;
 export const DeliveryPlanSchema = z.object({
   id: z.string().uuid(),
   createdAt: z.string().datetime(),
+  provider: RoutingProviderSchema,
   depot: GeocodedAddressSchema,
   firstDepartureTime: z.string().datetime(),
   dayType: DayTypeSchema,
@@ -83,6 +88,7 @@ export const OptimizeRequestSchema = z.object({
   targets: z.array(AddressInputSchema).min(1).max(50),
   firstDepartureTime: z.string().datetime(),
   deliveryDurationMinutes: z.number().positive().default(15),
+  provider: RoutingProviderSchema.optional(),
 });
 export type OptimizeRequest = z.infer<typeof OptimizeRequestSchema>;
 

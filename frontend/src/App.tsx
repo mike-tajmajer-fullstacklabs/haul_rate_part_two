@@ -47,7 +47,10 @@ const App: React.FC = () => {
       </main>
 
       <footer style={styles.footer}>
-        <p>Traffic data powered by TomTom</p>
+        <p>
+          Traffic data powered by{' '}
+          {plan?.provider === 'here' ? 'HERE' : plan?.provider === 'tomtom' ? 'TomTom' : 'TomTom / HERE'}
+        </p>
       </footer>
     </div>
   );

@@ -75,11 +75,19 @@ const ResultsPanel: React.FC<ResultsPanelProps> = ({ plan, error }) => {
     holiday: 'Holiday',
   };
 
+  const providerLabels: Record<string, string> = {
+    tomtom: 'TomTom',
+    here: 'HERE',
+  };
+
   return (
     <div style={styles.container}>
       <div style={styles.header}>
         <h2 style={styles.title}>Optimized Delivery Plan</h2>
-        <span style={styles.dayTypeBadge}>{dayTypeLabels[plan.dayType]}</span>
+        <div style={styles.badges}>
+          <span style={styles.providerBadge}>{providerLabels[plan.provider] || plan.provider}</span>
+          <span style={styles.dayTypeBadge}>{dayTypeLabels[plan.dayType]}</span>
+        </div>
       </div>
 
       <div style={styles.summary}>
@@ -199,6 +207,18 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     color: '#333',
     margin: 0,
+  },
+  badges: {
+    display: 'flex',
+    gap: '8px',
+  },
+  providerBadge: {
+    padding: '4px 12px',
+    background: '#dbeafe',
+    borderRadius: '12px',
+    fontSize: '12px',
+    fontWeight: 500,
+    color: '#1d4ed8',
   },
   dayTypeBadge: {
     padding: '4px 12px',
