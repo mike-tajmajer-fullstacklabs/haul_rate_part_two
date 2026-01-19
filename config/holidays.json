@@ -1,0 +1,77 @@
+{
+  "federalHolidays": [
+    {
+      "name": "New Year's Day",
+      "month": 1,
+      "day": 1,
+      "type": "fixed"
+    },
+    {
+      "name": "Martin Luther King Jr. Day",
+      "month": 1,
+      "weekday": 1,
+      "occurrence": 3,
+      "type": "floating"
+    },
+    {
+      "name": "Presidents' Day",
+      "month": 2,
+      "weekday": 1,
+      "occurrence": 3,
+      "type": "floating"
+    },
+    {
+      "name": "Memorial Day",
+      "month": 5,
+      "weekday": 1,
+      "occurrence": -1,
+      "type": "floating"
+    },
+    {
+      "name": "Juneteenth",
+      "month": 6,
+      "day": 19,
+      "type": "fixed"
+    },
+    {
+      "name": "Independence Day",
+      "month": 7,
+      "day": 4,
+      "type": "fixed"
+    },
+    {
+      "name": "Labor Day",
+      "month": 9,
+      "weekday": 1,
+      "occurrence": 1,
+      "type": "floating"
+    },
+    {
+      "name": "Columbus Day",
+      "month": 10,
+      "weekday": 1,
+      "occurrence": 2,
+      "type": "floating"
+    },
+    {
+      "name": "Veterans Day",
+      "month": 11,
+      "day": 11,
+      "type": "fixed"
+    },
+    {
+      "name": "Thanksgiving Day",
+      "month": 11,
+      "weekday": 4,
+      "occurrence": 4,
+      "type": "floating"
+    },
+    {
+      "name": "Christmas Day",
+      "month": 12,
+      "day": 25,
+      "type": "fixed"
+    }
+  ],
+  "userHolidays": []
+}
