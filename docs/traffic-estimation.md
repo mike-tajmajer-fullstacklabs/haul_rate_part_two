@@ -191,11 +191,58 @@ Execution order: B → C → A
 - **C** (9:00 AM): Moderate traffic, return ~10:15 AM
 - **A** (10:15 AM): Originally heavy at 8 AM, but 10 AM may be post-rush with better conditions
 
+### Two-Phase Computation: Why Routes Are Recalculated
+
+The optimization uses a **two-phase approach** because traffic density varies by time of day:
+
+#### Phase 1: Initial Sorting (All at First Departure Time)
+
+All routes are calculated assuming departure at the user-specified first departure time. This provides a baseline for sorting:
+
+```
+All targets calculated at 8:00 AM departure:
+  Target A: density 1.65
+  Target B: density 1.12
+  Target C: density 1.38
+
+Sorted order: B, C, A (lowest density first)
+```
+
+#### Phase 2: Recalculation with Actual Departure Times
+
+After sorting, each route is **recalculated using the actual departure time** for that delivery. This is critical because:
+
+1. **Traffic patterns change throughout the day**: A route with density 1.65 at 8:00 AM might have density 1.25 at 10:15 AM
+2. **Return trips happen at different times**: The return leg departs after unloading, which could be during different traffic conditions
+3. **Cumulative timing matters**: Each delivery's return time becomes the next delivery's departure time
+
+```
+Phase 2 recalculation:
+  Delivery 1 (Target B): Depart 8:00 AM → recalculate route → return 9:00 AM
+  Delivery 2 (Target C): Depart 9:00 AM → recalculate route → return 10:15 AM
+  Delivery 3 (Target A): Depart 10:15 AM → recalculate route → return 11:30 AM
+```
+
+**Why not just use Phase 1 results?**
+
+The Phase 1 calculation assumes all deliveries depart at 8:00 AM, which is physically impossible for sequential deliveries. Phase 2 provides accurate timing and traffic predictions for when each delivery actually occurs.
+
+**Example of density change due to recalculation:**
+
+| Target | Phase 1 (8:00 AM) | Phase 2 (Actual Time) | Change |
+|--------|-------------------|----------------------|--------|
+| B | 1.12 | 1.12 (8:00 AM) | Same |
+| C | 1.38 | 1.28 (9:00 AM) | Improved |
+| A | 1.65 | 1.22 (10:15 AM) | Significantly improved |
+
+In this example, Target A benefits most from being pushed later—its density drops from 1.65 to 1.22 because 10:15 AM is past the morning rush hour.
+
 ### Why This Works
 
 - **Rush hour avoidance**: High-density routes pushed past peak congestion windows
 - **Time shifting**: Later departures may encounter different (often better) traffic conditions
 - **Round-trip awareness**: Both outbound and return traffic impact is considered
+- **Accurate predictions**: Phase 2 recalculation ensures traffic estimates match actual departure times
 - **Cumulative benefit**: Small improvements per route compound across multiple deliveries
 
 ## Day Type Classification
@@ -265,6 +312,78 @@ For an optimization with **N delivery targets** (hub-and-spoke round-trip model)
 | Recalculated return routes | N | With actual return departure times |
 
 **Total per optimization**: ~1 + N + N + N + N + N = **1 + 5N calls** (worst case, no cache)
+
+### Typical Solution Example: 5 Delivery Targets
+
+Here's a detailed breakdown of API calls for a typical optimization with **1 depot and 5 delivery targets**, starting at 8:00 AM with 15-minute unloading time per stop:
+
+#### Phase 1: Geocoding (6 calls)
+
+| Call # | Operation | Input | Cached? |
+|--------|-----------|-------|---------|
+| 1 | Geocode depot | "123 Main St, Los Angeles, CA" | No (first run) |
+| 2 | Geocode target 1 | "456 Oak Ave, Pasadena, CA" | No |
+| 3 | Geocode target 2 | "789 Pine St, Glendale, CA" | No |
+| 4 | Geocode target 3 | "321 Elm Dr, Burbank, CA" | No |
+| 5 | Geocode target 4 | "654 Cedar Ln, Santa Monica, CA" | No |
+| 6 | Geocode target 5 | "987 Maple Rd, Long Beach, CA" | No |
+
+#### Phase 2: Initial Round-Trip Routes for Sorting (10 calls)
+
+All calculated at 8:00 AM departure to determine sort order:
+
+| Call # | Operation | Route | Result |
+|--------|-----------|-------|--------|
+| 7 | Route | Depot → Target 1 | Density: 1.45 |
+| 8 | Route | Target 1 → Depot | Density: 1.38 |
+| 9 | Route | Depot → Target 2 | Density: 1.12 |
+| 10 | Route | Target 2 → Depot | Density: 1.18 |
+| 11 | Route | Depot → Target 3 | Density: 1.55 |
+| 12 | Route | Target 3 → Depot | Density: 1.62 |
+| 13 | Route | Depot → Target 4 | Density: 1.28 |
+| 14 | Route | Target 4 → Depot | Density: 1.35 |
+| 15 | Route | Depot → Target 5 | Density: 1.72 |
+| 16 | Route | Target 5 → Depot | Density: 1.68 |
+
+**Round-trip densities calculated:**
+- Target 1: (1.45 + 1.38) / 2 = 1.42
+- Target 2: (1.12 + 1.18) / 2 = **1.15** ← Lowest, deliver first
+- Target 3: (1.55 + 1.62) / 2 = 1.59
+- Target 4: (1.28 + 1.35) / 2 = **1.32** ← Second
+- Target 5: (1.72 + 1.68) / 2 = 1.70 ← Highest, deliver last
+
+**Sorted order:** Target 2 → Target 4 → Target 1 → Target 3 → Target 5
+
+#### Phase 3: Recalculate Routes with Actual Departure Times (10 calls)
+
+| Call # | Delivery | Depart | Operation | Notes |
+|--------|----------|--------|-----------|-------|
+| 17 | 1st (Target 2) | 8:00 AM | Depot → Target 2 | Same as Phase 2 |
+| 18 | 1st (Target 2) | 8:25 AM | Target 2 → Depot | After 25 min travel + 15 min unload |
+| 19 | 2nd (Target 4) | 9:05 AM | Depot → Target 4 | After return from Target 2 |
+| 20 | 2nd (Target 4) | 9:45 AM | Target 4 → Depot | Different traffic than 8 AM |
+| 21 | 3rd (Target 1) | 10:30 AM | Depot → Target 1 | Post-rush hour |
+| 22 | 3rd (Target 1) | 11:00 AM | Target 1 → Depot | Midday traffic |
+| 23 | 4th (Target 3) | 11:40 AM | Depot → Target 3 | Midday traffic |
+| 24 | 4th (Target 3) | 12:15 PM | Target 3 → Depot | Lunch hour |
+| 25 | 5th (Target 5) | 12:55 PM | Depot → Target 5 | Early afternoon |
+| 26 | 5th (Target 5) | 1:40 PM | Target 5 → Depot | Afternoon traffic |
+
+#### Summary
+
+| Phase | API Calls | Purpose |
+|-------|-----------|---------|
+| Geocoding | 6 | Convert addresses to coordinates |
+| Initial routes | 10 | Calculate round-trip density for sorting |
+| Recalculated routes | 10 | Accurate timing with actual departures |
+| **Total** | **26** | Complete optimization |
+
+**Cost:** 26 calls × $0.00075 = **$0.020** (or free within daily limit)
+
+**With caching on subsequent runs:**
+- Geocoding: 0 calls (cached)
+- Routes with same times: 0 calls (cached)
+- **Re-run cost: $0** if inputs unchanged
 
 ### Example Cost Calculations
 
