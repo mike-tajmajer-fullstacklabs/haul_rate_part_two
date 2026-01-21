@@ -13,7 +13,7 @@ Traffic Density Forecasting POC for optimizing delivery order based on predicted
 - **Backend Framework**: Express.js
 - **Frontend**: React + Vite
 - **Validation**: Zod for runtime schema validation
-- **External APIs**: TomTom Routing API, TomTom Geocoding API, TomTom Search API
+- **External APIs**: TomTom, HERE, and Google Maps Platform (Directions, Geocoding, Places)
 - **Mapping**: Leaflet + react-leaflet for interactive maps
 
 ## Build Commands
@@ -45,10 +45,13 @@ src/
 ├── types/                # Zod schemas and TypeScript types
 ├── api/                  # Express route handlers
 ├── services/             # Business logic
-│   ├── tomtom.ts         # TomTom Routing API client
-│   ├── geocoding.ts      # TomTom Geocoding API client
-│   ├── optimizer.ts      # Delivery order optimization
-│   └── holidays.ts       # Day type detection (weekday/weekend/holiday)
+│   ├── provider-manager.ts    # Multi-provider management
+│   ├── routing-provider.ts    # Provider interface definition
+│   ├── tomtom-provider.ts     # TomTom API client
+│   ├── here-provider.ts       # HERE API client
+│   ├── google-provider.ts     # Google Maps API client
+│   ├── optimizer.ts           # Delivery order optimization
+│   └── holidays.ts            # Day type detection (weekday/weekend/holiday)
 └── storage/
     ├── cache-store.ts    # File-based API response caching
     └── plan-store.ts     # Delivery plan persistence
@@ -69,13 +72,13 @@ frontend/
         └── DensityChart.tsx   # Traffic density visualization
 ```
 
-**Data Flow**: Input addresses → Geocode (TomTom) → Calculate routes at departure time (TomTom) → Sort by traffic density → Return optimized delivery order
+**Data Flow**: Input addresses → Geocode (via selected provider) → Calculate routes at departure time (via selected provider) → Sort by traffic density → Return optimized delivery order
 
 ## Key Patterns
 
 - **Schema-driven**: Use Zod schemas for all external data and API contracts
 - **Configuration-driven**: JSON config files for holidays, .env for secrets
-- **File-based caching**: JSON cache to reduce TomTom API costs
+- **File-based caching**: JSON cache to reduce API costs (provider-aware)
 - **Hub-and-spoke routing**: Each delivery is a separate depot→target→depot trip
 - **Traffic density**: Ratio of actual travel time to no-traffic time (1.0 = free flow)
 - **Graceful shutdown**: Handle SIGINT/SIGTERM for clean server termination
@@ -94,12 +97,54 @@ frontend/
 | DELETE | /api/delivery/holidays/:date | Remove user holiday |
 | POST | /api/delivery/reverse-geocode | Convert coordinates to address |
 | GET | /api/delivery/search-locations | Search for locations by name |
+| GET | /api/delivery/providers | List available routing providers |
 
 ## Environment Variables
 
-Required in `.env`:
-- `TOMTOM_API_KEY` - TomTom API key
+Required in `.env` (at least one API key required):
+- `TOMTOM_API_KEY` - TomTom API key (https://developer.tomtom.com/)
+- `HERE_API_KEY` - HERE API key (https://developer.here.com/)
+- `GOOGLE_API_KEY` - Google Maps API key (https://console.cloud.google.com/)
 - `PORT` - Server port (default: 3000)
 - `NODE_ENV` - Environment (development/production)
 - `CACHE_ENABLED` - Enable/disable caching (default: true)
 - `CACHE_TTL_HOURS` - Cache TTL in hours (default: 24)
+
+## Routing Providers
+
+The application supports three routing providers. At least one API key must be configured.
+
+### TomTom
+- **Setup**: https://developer.tomtom.com/
+- **APIs Used**: Routing API, Geocoding API, Search API
+- **Pricing**: ~$0.42 per 1,000 routing requests, ~$0.42 per 1,000 geocoding requests
+- **Free Tier**: 2,500 free transactions/day
+
+### HERE
+- **Setup**: https://developer.here.com/
+- **APIs Used**: Routing v8, Geocoding, Autosuggest
+- **Pricing**: ~$0.49 per 1,000 routing requests, ~$1.00 per 1,000 geocoding requests
+- **Free Tier**: 250,000 transactions/month
+
+### Google Maps Platform
+- **Setup**: https://console.cloud.google.com/google/maps-apis
+- **APIs Used**: Directions API, Geocoding API, Places API (Autocomplete + Details)
+- **Pricing** (pay-as-you-go):
+  - Directions API: $5.00 per 1,000 requests
+  - Geocoding API: $5.00 per 1,000 requests
+  - Places Autocomplete: $2.83 per 1,000 requests
+  - Places Details: $17.00 per 1,000 requests
+- **Free Tier**: $200/month credit (covers ~40,000 direction requests or ~40,000 geocoding requests)
+- **Note**: Location search uses Places Autocomplete + Details (2 API calls per search result)
+
+### Cost Comparison (per 1,000 optimization runs with 10 targets each)
+
+| Provider | Geocoding | Routing | Search | Total Est. |
+|----------|-----------|---------|--------|------------|
+| TomTom   | ~$4.62    | ~$8.82  | ~$0.42 | ~$14/1K    |
+| HERE     | ~$11.00   | ~$10.29 | ~$1.00 | ~$22/1K    |
+| Google   | ~$55.00   | ~$105.00| ~$99.15| ~$259/1K   |
+
+*Estimates based on: 11 geocodes, 21 routes (outbound + return), 5 searches per optimization run*
+
+**Recommendation**: TomTom or HERE for cost-sensitive deployments. Google for maximum accuracy or existing Google Cloud integration.

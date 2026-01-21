@@ -5,8 +5,12 @@ export const DayTypeSchema = z.enum(['weekday', 'weekend', 'holiday']);
 export type DayType = z.infer<typeof DayTypeSchema>;
 
 // Routing provider enum
-export const RoutingProviderSchema = z.enum(['tomtom', 'here']);
+export const RoutingProviderSchema = z.enum(['tomtom', 'here', 'google']);
 export type RoutingProvider = z.infer<typeof RoutingProviderSchema>;
+
+// Google traffic model enum (only applicable when using Google provider)
+export const GoogleTrafficModelSchema = z.enum(['best_guess', 'pessimistic', 'optimistic']);
+export type GoogleTrafficModel = z.infer<typeof GoogleTrafficModelSchema>;
 
 // Coordinates
 export const CoordinatesSchema = z.object({
@@ -89,6 +93,8 @@ export const OptimizeRequestSchema = z.object({
   firstDepartureTime: z.string().datetime(),
   deliveryDurationMinutes: z.number().positive().default(15),
   provider: RoutingProviderSchema.optional(),
+  sortByTrafficDensity: z.boolean().default(false),
+  googleTrafficModel: GoogleTrafficModelSchema.optional(),
 });
 export type OptimizeRequest = z.infer<typeof OptimizeRequestSchema>;
 

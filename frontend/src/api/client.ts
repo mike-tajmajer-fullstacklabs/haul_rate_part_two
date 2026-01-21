@@ -1,6 +1,8 @@
 const API_BASE = '/api/delivery';
 
-export type RoutingProvider = 'tomtom' | 'here';
+export type RoutingProvider = 'tomtom' | 'here' | 'google';
+
+export type GoogleTrafficModel = 'best_guess' | 'pessimistic' | 'optimistic';
 
 export interface AddressInput {
   address: string;
@@ -13,6 +15,8 @@ export interface OptimizeRequest {
   firstDepartureTime: string;
   deliveryDurationMinutes?: number;
   provider?: RoutingProvider;
+  sortByTrafficDensity?: boolean;
+  googleTrafficModel?: GoogleTrafficModel;
 }
 
 export interface Coordinates {

@@ -13,6 +13,7 @@ const __dirname = dirname(__filename);
 const EnvSchema = z.object({
   TOMTOM_API_KEY: z.string().optional(),
   HERE_API_KEY: z.string().optional(),
+  GOOGLE_API_KEY: z.string().optional(),
   PORT: z.string().default('3000').transform(Number),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   CACHE_ENABLED: z.string().default('true').transform((v) => v === 'true'),
@@ -33,8 +34,8 @@ if (!envResult.success) {
 const env = envResult.data;
 
 // Validate at least one API key is provided
-if (!env.TOMTOM_API_KEY && !env.HERE_API_KEY) {
-  console.error('At least one API key is required: TOMTOM_API_KEY or HERE_API_KEY');
+if (!env.TOMTOM_API_KEY && !env.HERE_API_KEY && !env.GOOGLE_API_KEY) {
+  console.error('At least one API key is required: TOMTOM_API_KEY, HERE_API_KEY, or GOOGLE_API_KEY');
   process.exit(1);
 }
 
@@ -67,6 +68,16 @@ export const config = {
     requestTimeoutMs: 30000,
   },
 
+  // Google Maps API
+  google: {
+    apiKey: env.GOOGLE_API_KEY || '',
+    enabled: !!env.GOOGLE_API_KEY,
+    directionsBaseUrl: 'https://maps.googleapis.com/maps/api/directions',
+    geocodingBaseUrl: 'https://maps.googleapis.com/maps/api/geocode',
+    placesBaseUrl: 'https://maps.googleapis.com/maps/api/place',
+    requestTimeoutMs: 30000,
+  },
+
   // Caching
   cache: {
     enabled: env.CACHE_ENABLED,
@@ -87,7 +98,7 @@ export const config = {
     deliveryDurationMinutes: 15,
     maxTargets: 50,
     countrySet: 'US',
-    defaultProvider: (env.TOMTOM_API_KEY ? 'tomtom' : 'here') as 'tomtom' | 'here',
+    defaultProvider: (env.TOMTOM_API_KEY ? 'tomtom' : env.HERE_API_KEY ? 'here' : 'google') as 'tomtom' | 'here' | 'google',
   },
 } as const;
 

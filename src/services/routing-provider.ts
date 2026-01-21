@@ -1,13 +1,14 @@
-import { GeocodedAddress, RouteSegment, AddressInput, Coordinates } from '../types/index.js';
+import { GeocodedAddress, RouteSegment, AddressInput, Coordinates, GoogleTrafficModel } from '../types/index.js';
 
 // Provider types
-export type RoutingProviderType = 'tomtom' | 'here';
+export type RoutingProviderType = 'tomtom' | 'here' | 'google';
 
 // Common interfaces for all routing providers
 export interface RouteRequest {
   origin: GeocodedAddress;
   destination: GeocodedAddress;
   departureTime: string;
+  googleTrafficModel?: GoogleTrafficModel; // Only used by Google provider
 }
 
 export interface LocationSearchResult {

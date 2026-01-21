@@ -9,6 +9,7 @@ import {
   OptimizedDelivery,
   RouteSegment,
   DeliveryTarget,
+  GoogleTrafficModel,
 } from '../types/index.js';
 import { RoutingProviderType, IRoutingProvider } from './routing-provider.js';
 
@@ -18,6 +19,8 @@ interface OptimizeOptions {
   firstDepartureTime: string;
   deliveryDurationMinutes?: number;
   provider?: RoutingProviderType;
+  sortByTrafficDensity?: boolean;
+  googleTrafficModel?: GoogleTrafficModel;
 }
 
 interface RoundTripRoute {
@@ -35,6 +38,8 @@ export class DeliveryOptimizer {
       firstDepartureTime,
       deliveryDurationMinutes = config.defaults.deliveryDurationMinutes,
       provider: providerType,
+      sortByTrafficDensity = false,
+      googleTrafficModel,
     } = options;
 
     // Get the routing provider
@@ -68,6 +73,7 @@ export class DeliveryOptimizer {
         origin: depotGeocoded,
         destination: target,
         departureTime: firstDepartureTime,
+        googleTrafficModel,
       });
 
       // Estimate return departure time
@@ -81,6 +87,7 @@ export class DeliveryOptimizer {
         origin: target,
         destination: depotGeocoded,
         departureTime: returnDepartureTime.toISOString(),
+        googleTrafficModel,
       });
 
       // Calculate round-trip traffic density (average of both legs)
@@ -95,8 +102,10 @@ export class DeliveryOptimizer {
       });
     }
 
-    // Step 3: Sort targets by round-trip traffic density (lowest first)
-    roundTripRoutes.sort((a, b) => a.roundTripTrafficDensity - b.roundTripTrafficDensity);
+    // Step 3: Optionally sort targets by round-trip traffic density (lowest first)
+    if (sortByTrafficDensity) {
+      roundTripRoutes.sort((a, b) => a.roundTripTrafficDensity - b.roundTripTrafficDensity);
+    }
 
     // Step 4: Build optimized delivery sequence with recalculated times
     const deliveries: OptimizedDelivery[] = [];
@@ -110,6 +119,7 @@ export class DeliveryOptimizer {
         origin: depotGeocoded,
         destination: target,
         departureTime: currentDepartureTime.toISOString(),
+        googleTrafficModel,
       });
 
       const departureTime = new Date(currentDepartureTime);
@@ -125,6 +135,7 @@ export class DeliveryOptimizer {
         origin: target,
         destination: depotGeocoded,
         departureTime: deliveryEndTime.toISOString(),
+        googleTrafficModel,
       });
 
       const returnTime = new Date(returnRoute.arrivalTime);
@@ -172,8 +183,12 @@ export class DeliveryOptimizer {
       (sum, d) => sum + d.roundTripTrafficDensity,
       0
     );
+    // Average traffic density = total travel time / total free-flow time
+    // This is a time-weighted average that reflects the true overall traffic impact
     const averageTrafficDensity =
-      deliveries.length > 0 ? cumulativeTrafficDensity / deliveries.length : 1;
+      totalNoTrafficTravelTimeSeconds > 0
+        ? totalTravelTimeSeconds / totalNoTrafficTravelTimeSeconds
+        : 1;
 
     // Determine day type
     const departureDate = new Date(firstDepartureTime);

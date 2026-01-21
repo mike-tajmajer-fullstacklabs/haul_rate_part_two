@@ -78,6 +78,7 @@ const ResultsPanel: React.FC<ResultsPanelProps> = ({ plan, error }) => {
   const providerLabels: Record<string, string> = {
     tomtom: 'TomTom',
     here: 'HERE',
+    google: 'Google',
   };
 
   return (
@@ -112,7 +113,7 @@ const ResultsPanel: React.FC<ResultsPanelProps> = ({ plan, error }) => {
         </div>
       </div>
 
-      <DensityChart deliveries={plan.deliveries} />
+      <DensityChart deliveries={plan.deliveries} averageTrafficDensity={plan.averageTrafficDensity} />
 
       <div style={styles.depotInfo}>
         <div style={styles.depotIcon}>D</div>

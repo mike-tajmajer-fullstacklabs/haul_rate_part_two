@@ -5,10 +5,11 @@ This document explains how the Traffic Density Forecasting POC estimates and use
 ## Overview
 
 The application supports multiple routing providers for traffic-aware travel time estimates:
-- **TomTom Routing API** - Primary provider
-- **HERE Routing API** - Alternative provider
+- **TomTom Routing API** - Cost-effective option with good accuracy
+- **HERE Routing API** - Generous free tier, good for development
+- **Google Maps Platform** - Premium accuracy, higher cost
 
-Both providers return predicted travel times based on historical traffic patterns when you specify a future departure time. The provider can be selected in the UI before running an optimization.
+All providers return predicted travel times based on historical traffic patterns when you specify a future departure time. The provider can be selected in the UI before running an optimization.
 
 ## Supported Routing Providers
 
@@ -22,7 +23,13 @@ Both providers return predicted travel times based on historical traffic pattern
 - Free tier: 250,000 transactions/month (~8,300/day)
 - Provides: Routing, geocoding, traffic, search
 
-Both providers offer similar capabilities for this POC. You can configure one or both by setting the respective API keys in `.env`.
+### Google Maps Platform
+- Website: https://console.cloud.google.com/google/maps-apis
+- Free tier: $200/month credit (~40,000 direction requests)
+- Provides: Directions (routing), geocoding, Places (search/autocomplete)
+- Note: Generally considered the most accurate, but significantly more expensive
+
+All three providers offer similar capabilities for this POC. You can configure one or more by setting the respective API keys in `.env`.
 
 ## Data Source: Routing APIs
 
@@ -36,7 +43,14 @@ GET /routing/1/calculateRoute/{origin}:{destination}/json
 GET /v8/routes
 ```
 
+### Google Directions API Endpoint
+```
+GET /maps/api/directions/json
+```
+
 ### Key Parameters
+
+**TomTom & HERE:**
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
@@ -45,9 +59,18 @@ GET /v8/routes
 | `computeTravelTimeFor` | `all` | Return both traffic and no-traffic times |
 | `routeType` | `fastest` | Optimize for shortest travel time |
 
+**Google Directions API:**
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `departure_time` | Unix timestamp | Specify departure time for traffic prediction |
+| `traffic_model` | `best_guess` | Use best estimate based on historical data |
+| `origin` | lat,lng or address | Starting point |
+| `destination` | lat,lng or address | End point |
+
 ### Response Data Used
 
-The API returns a route summary containing:
+**TomTom/HERE Response:**
 
 ```json
 {
@@ -60,6 +83,189 @@ The API returns a route summary containing:
   }
 }
 ```
+
+**Google Directions Response:**
+
+```json
+{
+  "routes": [{
+    "legs": [{
+      "duration": {
+        "value": 1200,
+        "text": "20 mins"
+      },
+      "duration_in_traffic": {
+        "value": 1847,
+        "text": "31 mins"
+      },
+      "distance": {
+        "value": 15000,
+        "text": "15 km"
+      }
+    }]
+  }]
+}
+```
+
+### Important: Baseline Time Differences Between Providers
+
+The providers differ in how they define "no traffic" or baseline travel time:
+
+| Provider | Baseline Field | What It Represents |
+|----------|---------------|-------------------|
+| **TomTom** | `noTrafficTravelTimeInSeconds` | True free-flow time (speed limit conditions) |
+| **HERE** | `baseDuration` | True free-flow time (speed limit conditions) |
+| **Google** | `duration` | **Historical average** (typical conditions) |
+
+**Why this matters**: Google's `duration` is NOT true free-flow time. It represents travel time under typical historical conditions. This means:
+
+- **TomTom/HERE**: Traffic density is always ≥ 1.0 (you can't drive faster than speed limits)
+- **Google**: Traffic density can be < 1.0 when predicted conditions are better than the historical average
+
+**When Google returns density < 1.0**:
+- Off-peak hours (late night, early morning) with lighter-than-typical traffic
+- Using `traffic_model=optimistic` which returns best-case scenarios
+- Predicted conditions simply better than the historical baseline
+
+**How this application handles it**: To maintain consistency across providers, Google traffic density values are **clamped to a minimum of 1.0**. This ensures the density metric has the same meaning regardless of provider: "1.0 = best possible conditions".
+
+### How Departure Time Predictions Work
+
+When you specify a future departure time (`departAt` or `departure_time`), the routing APIs use **historical traffic data** to predict travel times. This section explains the methodology each provider uses.
+
+#### Data Collection Sources
+
+All three providers collect traffic data from similar sources:
+
+| Provider | Primary Data Sources | Scale |
+|----------|---------------------|-------|
+| **TomTom** | Navigation devices, in-dash systems, mobile apps (Floating Car Data) | 600+ million devices worldwide |
+| **HERE** | Connected car probes, mobile devices, fleet vehicles | Trillions of GPS probe points |
+| **Google** | Android devices, Google Maps users, Waze, connected vehicles | Billions of data points daily |
+
+This crowdsourced data is anonymized and aggregated to build comprehensive traffic pattern models.
+
+#### Factors Used in Traffic Prediction
+
+The historical data is analyzed and stored with multiple dimensions that influence predictions:
+
+| Factor | How It's Used | Example |
+|--------|---------------|---------|
+| **Day of Week** | Traffic patterns differ significantly between weekdays | Monday 8 AM vs Saturday 8 AM |
+| **Time of Day** | Rush hours, midday lulls, overnight periods | 8 AM (rush) vs 2 PM (lighter) |
+| **Time Intervals** | Data stored in 15-60 minute granularity | 8:00-8:15 AM, 8:15-8:30 AM, etc. |
+| **Seasonal Patterns** | Summer vs winter, school year vs vacation | July traffic vs September traffic |
+| **Holidays** | Special traffic patterns for holidays and events | Christmas Eve, July 4th, etc. |
+| **Road Segment** | Each road link has its own historical profile | Highway I-405 vs local street |
+| **Direction** | Inbound vs outbound traffic differs | Morning: suburbs→city heavy |
+
+#### Provider-Specific Methodologies
+
+**TomTom:**
+- Stores historical averages for every road segment in their map database
+- When you use `departAt`, the routing engine looks up the historical speed data for that specific day-of-week and time-of-day
+- Can predict travel times for any day up to one year in the future
+- Combines historical patterns with any known long-term road closures
+- Setting `computeTravelTimeFor=all` returns both historical and no-traffic travel times
+
+**HERE:**
+- Maintains 3-year rolling averages of historical observations
+- Data granularity: 15-minute intervals for each day of the week
+- Includes a "holiday appendix" with guidance for unusual traffic days
+- Refreshed regularly to account for seasonal trends and weekday/weekend variations
+- For past departure times, only historical data is applied (no real-time)
+- For future times, uses historical patterns plus any scheduled road closures
+- Setting `departureTime=any` disables traffic consideration entirely ("planning mode")
+
+**Google:**
+- Uses machine learning models trained on historical time-of-day and day-of-week patterns
+- Offers three prediction models via the `traffic_model` parameter:
+  - `best_guess` (default): Combines historical data with live traffic (weighted by how far in the future)
+  - `pessimistic`: Returns longer estimates (worst-case historical patterns)
+  - `optimistic`: Returns shorter estimates (best-case historical patterns)
+- Live traffic data is weighted more heavily for near-future departure times
+- For far-future times, relies primarily on historical averages
+
+#### How Day Type Affects Predictions
+
+Traffic patterns fall into distinct categories:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TYPICAL WEEKDAY PATTERN                       │
+│                                                                  │
+│  Traffic │        ████                          ████             │
+│  Density │      ██    ██                      ██    ██           │
+│          │    ██        ██                  ██        ██         │
+│          │  ██            ████████████████ ██           ██       │
+│          │██                                              ██     │
+│          └──────────────────────────────────────────────────────│
+│            6AM   8AM   10AM  12PM  2PM   4PM   6PM   8PM   10PM  │
+│                  ↑ Morning Rush            ↑ Evening Rush        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    TYPICAL WEEKEND PATTERN                       │
+│                                                                  │
+│  Traffic │                    ████████████                       │
+│  Density │                  ██            ██                     │
+│          │                ██                ██                   │
+│          │              ██                    ██                 │
+│          │████████████ ██                       ██████████████   │
+│          └──────────────────────────────────────────────────────│
+│            6AM   8AM   10AM  12PM  2PM   4PM   6PM   8PM   10PM  │
+│                              ↑ Midday Peak                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| Day Type | Traffic Characteristics | Peak Times |
+|----------|------------------------|------------|
+| **Weekday (Mon-Fri)** | Bi-modal with morning and evening rush hours | 7-9 AM, 4-7 PM |
+| **Weekend (Sat-Sun)** | Single midday peak, later start, more even distribution | 11 AM - 4 PM |
+| **Holiday** | Similar to weekend but often lighter overall | Varies by holiday |
+| **Holiday Eve** | Can have unusual patterns (early departures) | Often heavy 2-6 PM |
+| **Special Events** | Localized spikes near event venues | Event-specific |
+
+#### Data Freshness and Updates
+
+| Provider | Historical Data Refresh | Real-Time Integration |
+|----------|------------------------|----------------------|
+| **TomTom** | Continuously updated with new observations | Blended with live data for near-future |
+| **HERE** | Regular updates, 3-year rolling average | Live traffic for current/near-future |
+| **Google** | Continuously updated ML models | Strong live weighting for near-future |
+
+#### Prediction Accuracy by Time Horizon
+
+| Time Until Departure | Data Used | Accuracy Level |
+|---------------------|-----------|----------------|
+| **0-30 minutes** | Live traffic + historical | Highest (current conditions known) |
+| **30 min - 2 hours** | Live trends + historical | Very high |
+| **2-24 hours** | Historical patterns | High (same-day patterns reliable) |
+| **1-7 days** | Historical day-of-week patterns | Good |
+| **1-4 weeks** | Historical patterns + seasonal | Moderate |
+| **1+ months** | Historical averages only | Lower (no event awareness) |
+
+#### Limitations of Historical Predictions
+
+The departure time predictions **cannot account for**:
+
+| Factor | Why It's Unpredictable | Impact |
+|--------|----------------------|--------|
+| **Accidents** | Random, unpredictable events | Can cause severe delays |
+| **Road Construction** | May not be in historical data | Variable delays |
+| **Weather** | Not included in standard predictions | Rain/snow adds 10-30% |
+| **Special Events** | Concerts, sports games, protests | Localized severe congestion |
+| **School Schedules** | Summer break vs school year differs | Different rush hour patterns |
+| **Pandemic/Unusual Periods** | Historical data may be outdated | Patterns may have shifted |
+
+#### Best Practices for Accurate Predictions
+
+1. **Run predictions closer to departure**: Same-day predictions are most accurate
+2. **Account for day type**: Ensure your departure date matches the expected traffic pattern
+3. **Consider time sensitivity**: Rush hour predictions are more variable than midday
+4. **Re-run for critical deliveries**: If conditions may have changed, refresh the prediction
+5. **Use appropriate traffic model (Google)**: `pessimistic` for time-critical deliveries
+6. **Enable caching wisely**: Cache for repeated same-time queries, but refresh for different times
 
 ## Traffic Density Metric
 
@@ -93,15 +299,21 @@ Traffic Density = 1847 / 1200 = 1.539
 
 This indicates **heavy traffic** with ~54% delay compared to free-flow conditions.
 
-## Predictive Traffic (departAt Parameter)
+## Predictive Traffic (departAt / departure_time Parameter)
 
 ### How It Works
 
-When you specify a future `departAt` time, TomTom uses:
+When you specify a future departure time, all providers use similar approaches:
 
+**TomTom & HERE** use the `departAt` parameter with:
 1. **Historical Traffic Patterns**: Aggregated data from millions of connected devices showing typical traffic conditions for that time slot
 2. **Day Type Awareness**: Different patterns for weekdays vs weekends
 3. **Seasonal Adjustments**: Accounts for time-of-year variations
+
+**Google** uses the `departure_time` parameter (Unix timestamp) with:
+1. **Historical Traffic Data**: Leverages Google's extensive traffic data from Android devices, Google Maps users, and Waze
+2. **Machine Learning Models**: Advanced prediction models trained on billions of data points
+3. **Traffic Model Options**: `best_guess` (default), `pessimistic`, or `optimistic` predictions
 
 ### Prediction Accuracy
 
@@ -156,6 +368,101 @@ By averaging both directions, we capture the **total traffic impact** of the com
 | Depot → Target | 45 min | 30 min | 1.50 |
 | Target → Depot | 35 min | 30 min | 1.17 |
 | **Round Trip** | 80 min | 60 min | **1.34** (avg) |
+
+## Average Traffic Density (Plan-Level)
+
+### Definition
+
+The **Average Traffic Density** represents the overall traffic impact across all deliveries in a plan. It is calculated as the ratio of total actual travel time to total free-flow travel time:
+
+```
+                          Total Travel Time (with traffic)
+Average Traffic Density = ─────────────────────────────────
+                          Total Free-Flow Travel Time
+```
+
+Or mathematically:
+
+```
+                    Σ (outbound_time[i] + return_time[i])
+Average Density = ──────────────────────────────────────────
+                  Σ (outbound_freeflow[i] + return_freeflow[i])
+```
+
+Where the sums are over all deliveries in the plan.
+
+### Calculation Example
+
+For a delivery plan with 3 targets:
+
+| Delivery | Outbound Time | Return Time | Total Time | Outbound Free-Flow | Return Free-Flow | Total Free-Flow |
+|----------|---------------|-------------|------------|-------------------|-----------------|-----------------|
+| 1 | 25 min | 22 min | 47 min | 20 min | 20 min | 40 min |
+| 2 | 38 min | 35 min | 73 min | 30 min | 30 min | 60 min |
+| 3 | 18 min | 20 min | 38 min | 15 min | 15 min | 30 min |
+| **Total** | | | **158 min** | | | **130 min** |
+
+```
+Average Density = 158 / 130 = 1.215
+```
+
+This means overall, the deliveries took 21.5% longer than they would under free-flow conditions.
+
+### Why Time-Weighted (Not Simple Average)?
+
+The average is **weighted by travel time**, meaning longer routes contribute more to the overall average. This approach:
+
+1. **Reflects true time impact**: A 60-minute route with 1.5 density adds more delay (30 min) than a 10-minute route with the same density (5 min)
+2. **Accurate total delay**: The formula `(Average Density - 1) × Total Free-Flow Time` gives the exact total delay
+3. **Meaningful for planning**: Tells you the overall traffic multiplier for your entire delivery operation
+
+### Comparison: Time-Weighted vs Simple Average
+
+Consider a plan with 2 deliveries:
+
+| Delivery | Travel Time | Free-Flow Time | Route Density |
+|----------|-------------|----------------|---------------|
+| 1 (short) | 12 min | 10 min | 1.20 |
+| 2 (long) | 90 min | 60 min | 1.50 |
+| **Total** | **102 min** | **70 min** | |
+
+**Simple Average** (mean of densities):
+```
+(1.20 + 1.50) / 2 = 1.35
+```
+
+**Time-Weighted Average** (total time / total free-flow):
+```
+102 / 70 = 1.457
+```
+
+The time-weighted average (1.457) is higher because it correctly reflects that most of the driving time was spent on the heavily congested route. The simple average (1.35) underestimates the true traffic impact.
+
+**Verification**: Total delay = 102 - 70 = 32 minutes
+- Time-weighted: (1.457 - 1) × 70 = 32 min ✓
+- Simple average: (1.35 - 1) × 70 = 24.5 min ✗
+
+### Interpretation Guide
+
+| Average Density | Overall Traffic Conditions | Typical Scenario |
+|-----------------|---------------------------|------------------|
+| 1.00 - 1.10 | Excellent | Free-flow conditions, off-peak hours |
+| 1.10 - 1.20 | Good | Light traffic, early morning or midday |
+| 1.20 - 1.35 | Moderate | Typical business hours, some congestion |
+| 1.35 - 1.50 | Poor | Rush hour conditions, significant delays |
+| 1.50+ | Severe | Heavy congestion, major delays throughout |
+
+### Display in the Application
+
+The Average Density is displayed in two places:
+
+1. **Summary Section**: Shows the numeric value with color coding
+2. **Density Chart**: A horizontal blue line indicates the average level relative to individual delivery bars
+
+The chart visualization helps identify:
+- How individual deliveries compare to the average
+- Whether there are outliers (very high or low density routes)
+- The overall traffic impact at a glance
 
 ## Optimization Algorithm
 
@@ -330,6 +637,25 @@ This means:
 
 **Note**: HERE's free tier is significantly more generous than TomTom's, making it a good choice for development and light production use.
 
+### Google Maps Platform Pricing
+
+| API | Cost per 1,000 requests |
+|-----|------------------------|
+| Directions API | $5.00 |
+| Geocoding API | $5.00 |
+| Places Autocomplete | $2.83 |
+| Places Details | $17.00 |
+
+**Free tier**: $200/month credit applied automatically to all usage.
+
+**Important notes**:
+- Google is significantly more expensive than TomTom or HERE
+- Location search requires 2 API calls per result (Autocomplete + Details)
+- The $200/month credit covers approximately:
+  - 40,000 direction requests, OR
+  - 40,000 geocoding requests, OR
+  - ~10,000 location searches (Autocomplete + Details combined)
+
 ### API Calls Per Optimization
 
 For an optimization with **N delivery targets** (hub-and-spoke round-trip model):
@@ -413,6 +739,7 @@ All calculated at 8:00 AM departure to determine sort order:
 **Cost per provider (26 calls):**
 - **TomTom**: 26 × $0.00075 = **$0.020** (or free within 2,500/day limit)
 - **HERE**: 26 × $0.00049 = **$0.013** (or free within ~8,300/day limit)
+- **Google**: 26 × $0.005 = **$0.130** (or free within $200/month credit)
 
 **With caching on subsequent runs:**
 - Geocoding: 0 calls (cached)
@@ -443,16 +770,30 @@ All calculated at 8:00 AM departure to determine sort order:
 
 *HERE pricing: ~$0.49 per 1,000 transactions. Free tier: 250,000/month (~8,300/day).*
 
+#### Google Costs
+
+| Scenario | Targets | API Calls (1+5N) | $200 Credit Runs/Month | Paid Cost/Run |
+|----------|---------|------------------|------------------------|---------------|
+| Small batch | 5 | ~26 | ~1,538/month | $0.130 |
+| Medium batch | 10 | ~51 | ~784/month | $0.255 |
+| Large batch | 20 | ~101 | ~396/month | $0.505 |
+| Max batch | 50 | ~251 | ~159/month | $1.255 |
+
+*Google pricing: $5.00 per 1,000 requests (Directions/Geocoding). Free tier: $200/month credit.*
+
 #### Provider Comparison
 
-| Scenario | TomTom Cost | HERE Cost | HERE Savings |
-|----------|-------------|-----------|--------------|
-| Small batch (5) | $0.020 | $0.013 | 35% |
-| Medium batch (10) | $0.038 | $0.025 | 34% |
-| Large batch (20) | $0.076 | $0.049 | 36% |
-| Max batch (50) | $0.188 | $0.123 | 35% |
+| Scenario | TomTom Cost | HERE Cost | Google Cost | Best Value |
+|----------|-------------|-----------|-------------|------------|
+| Small batch (5) | $0.020 | $0.013 | $0.130 | HERE (85% cheaper than Google) |
+| Medium batch (10) | $0.038 | $0.025 | $0.255 | HERE (90% cheaper than Google) |
+| Large batch (20) | $0.076 | $0.049 | $0.505 | HERE (90% cheaper than Google) |
+| Max batch (50) | $0.188 | $0.123 | $1.255 | HERE (90% cheaper than Google) |
 
-**Recommendation**: HERE offers ~35% lower per-request costs and a significantly larger free tier (250,000/month vs 2,500/day), making it more cost-effective for most use cases.
+**Recommendation**:
+- **Cost-sensitive**: HERE offers the best value with ~35% lower costs than TomTom and ~90% lower than Google
+- **Accuracy-focused**: Google may provide better predictions due to larger data coverage, but at 6-10x the cost
+- **Development**: HERE's generous free tier (250,000/month) is ideal for testing and development
 
 ### Cost Reduction with Caching
 
@@ -486,21 +827,35 @@ Caching significantly reduces costs for repeated operations:
 
 *HERE free tier: ~8,300 requests/day (250,000/month)*
 
+#### Google Monthly Costs
+
+| Usage Level | Optimizations/Day | Targets/Opt | API Calls/Day | Monthly Cost |
+|-------------|-------------------|-------------|---------------|--------------|
+| Light | 10 | 10 | ~510 | $200 credit covers (~13 days) |
+| Moderate | 50 | 10 | ~2,550 | ~$183 (after $200 credit) |
+| Heavy | 200 | 15 | ~15,200 | ~$2,080 (after $200 credit) |
+
+*Google free tier: $200/month credit. Directions/Geocoding: $5.00 per 1,000 requests.*
+
 #### Monthly Cost Comparison
 
-| Usage Level | TomTom | HERE | Savings with HERE |
-|-------------|--------|------|-------------------|
-| Light (10/day) | $0 | $0 | - |
-| Moderate (50/day) | ~$38 | $0 | 100% (free tier) |
-| Heavy (200/day) | ~$342 | ~$102 | 70% |
+| Usage Level | TomTom | HERE | Google | Best Value |
+|-------------|--------|------|--------|------------|
+| Light (10/day) | $0 | $0 | ~$0* | TomTom or HERE |
+| Moderate (50/day) | ~$38 | $0 | ~$183 | HERE |
+| Heavy (200/day) | ~$342 | ~$102 | ~$2,080 | HERE |
+
+*\*Google $200 credit covers ~13 days at light usage*
 
 ### Cost Optimization Tips
 
-1. **Use HERE for cost savings**: HERE offers lower per-request costs and a larger free tier
-2. **Enable caching**: Reduces repeat API calls
-3. **Batch similar deliveries**: Run optimization once for the day
-4. **Reuse depot addresses**: Cached geocoding saves calls
-5. **Avoid unnecessary re-runs**: Only re-optimize when inputs change
+1. **Use HERE or TomTom for cost savings**: Both offer significantly lower costs than Google (~90% cheaper)
+2. **HERE for development**: Best free tier (250,000/month) for testing and development
+3. **Google for accuracy-critical use**: Consider Google only when maximum accuracy justifies the cost
+4. **Enable caching**: Reduces repeat API calls by 50-80%
+5. **Batch similar deliveries**: Run optimization once for the day
+6. **Reuse depot addresses**: Cached geocoding saves calls
+7. **Avoid unnecessary re-runs**: Only re-optimize when inputs change
 
 ## References
 
@@ -513,3 +868,10 @@ Caching significantly reduces costs for repeated operations:
 - [HERE Routing API Documentation](https://developer.here.com/documentation/routing-api/dev_guide/index.html)
 - [HERE Geocoding & Search](https://developer.here.com/documentation/geocoding-search-api/dev_guide/index.html)
 - [HERE Pricing](https://www.here.com/platform/pricing)
+
+### Google Maps Platform
+- [Google Directions API Documentation](https://developers.google.com/maps/documentation/directions/overview)
+- [Google Geocoding API Documentation](https://developers.google.com/maps/documentation/geocoding/overview)
+- [Google Places API Documentation](https://developers.google.com/maps/documentation/places/web-service/overview)
+- [Google Maps Platform Pricing](https://developers.google.com/maps/billing-and-pricing/pricing)
+- [Google Maps Platform Console](https://console.cloud.google.com/google/maps-apis)

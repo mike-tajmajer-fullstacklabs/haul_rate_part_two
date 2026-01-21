@@ -3,6 +3,7 @@ import { OptimizedDelivery } from '../api/client';
 
 interface DensityChartProps {
   deliveries: OptimizedDelivery[];
+  averageTrafficDensity?: number;
 }
 
 const getDensityColor = (density: number): string => {
@@ -12,11 +13,16 @@ const getDensityColor = (density: number): string => {
   return '#ef4444'; // Red
 };
 
-const DensityChart: React.FC<DensityChartProps> = ({ deliveries }) => {
+const DensityChart: React.FC<DensityChartProps> = ({ deliveries, averageTrafficDensity }) => {
   if (deliveries.length === 0) return null;
+
+  // Calculate average if not provided
+  const avgDensity = averageTrafficDensity ??
+    deliveries.reduce((sum, d) => sum + d.roundTripTrafficDensity, 0) / deliveries.length;
 
   const maxDensity = Math.max(
     2, // Minimum scale
+    avgDensity + 0.2, // Ensure average line is visible
     ...deliveries.map((d) => d.roundTripTrafficDensity)
   );
 
@@ -27,30 +33,49 @@ const DensityChart: React.FC<DensityChartProps> = ({ deliveries }) => {
     <div style={styles.container}>
       <h3 style={styles.title}>Round-Trip Traffic Density by Delivery</h3>
       <div style={styles.chartArea}>
-        {/* Y-axis labels */}
-        <div style={styles.yAxis}>
-          <span style={styles.yLabel}>{maxDensity.toFixed(1)}</span>
-          <span style={styles.yLabel}>{(maxDensity / 2).toFixed(1)}</span>
-          <span style={styles.yLabel}>1.0</span>
+        {/* Y-axis labels - exactly chartHeight tall */}
+        <div style={{ ...styles.yAxis, height: `${chartHeight}px` }}>
+          <span style={styles.yLabel}>{maxDensity.toFixed(2)}</span>
+          <span style={styles.yLabel}>{((1 + maxDensity) / 2).toFixed(2)}</span>
+          <span style={styles.yLabel}>1.00</span>
         </div>
 
-        {/* Chart bars */}
-        <div style={styles.barsContainer}>
-          {/* Reference line at 1.0 (free flow) */}
-          <div
-            style={{
-              ...styles.referenceLine,
-              bottom: `${(1 / maxDensity) * chartHeight}px`,
-            }}
-          />
-
-          {deliveries.map((delivery) => {
-            const density = delivery.roundTripTrafficDensity;
-            const barHeight = (density / maxDensity) * chartHeight;
-
-            return (
-              <div key={delivery.route.id} style={styles.barColumn}>
+        {/* Chart content area */}
+        <div style={styles.chartContent}>
+          {/* Bars area - exactly chartHeight tall, aligned with Y-axis */}
+          <div style={{ ...styles.barsArea, height: `${chartHeight}px` }}>
+            {/* Grid lines at fixed density values */}
+            {[1.0, 1.25, 1.5, 1.75, 2.0]
+              .filter((density) => density <= maxDensity)
+              .map((density) => (
                 <div
+                  key={`grid-${density}`}
+                  style={{
+                    ...styles.gridLine,
+                    bottom: `${((density - 1) / (maxDensity - 1)) * chartHeight}px`,
+                  }}
+                />
+              ))}
+
+            {/* Average density line */}
+            <div
+              style={{
+                ...styles.averageLine,
+                bottom: `${((avgDensity - 1) / (maxDensity - 1)) * chartHeight}px`,
+              }}
+            >
+              <span style={styles.averageLabel}>Avg: {avgDensity.toFixed(2)}</span>
+            </div>
+
+            {deliveries.map((delivery) => {
+              const density = delivery.roundTripTrafficDensity;
+              // Scale bar height from 1.0 (bottom) to maxDensity (top)
+              // Ensure minimum height of 20px for visibility
+              const barHeight = Math.max(20, ((density - 1) / (maxDensity - 1)) * chartHeight);
+
+              return (
+                <div
+                  key={delivery.route.id}
                   style={{
                     ...styles.bar,
                     height: `${barHeight}px`,
@@ -61,10 +86,21 @@ const DensityChart: React.FC<DensityChartProps> = ({ deliveries }) => {
                 >
                   <span style={styles.barValue}>{density.toFixed(2)}</span>
                 </div>
-                <span style={styles.barLabel}>{delivery.order}</span>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+
+          {/* X-axis labels - separate row below the bars */}
+          <div style={styles.xAxisLabels}>
+            {deliveries.map((delivery) => (
+              <span
+                key={delivery.route.id}
+                style={{ ...styles.barLabel, width: `${barWidth}px` }}
+              >
+                {delivery.order}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -107,44 +143,59 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chartArea: {
     display: 'flex',
-    height: '150px',
     gap: '8px',
   },
   yAxis: {
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'space-between',
-    paddingBottom: '20px',
-    width: '32px',
+    width: '40px',
   },
   yLabel: {
     fontSize: '10px',
     color: '#6b7280',
     textAlign: 'right',
   },
-  barsContainer: {
+  chartContent: {
     flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  barsArea: {
     display: 'flex',
     alignItems: 'flex-end',
     justifyContent: 'center',
     gap: '8px',
     position: 'relative',
-    paddingBottom: '20px',
     borderBottom: '1px solid #e5e7eb',
   },
-  referenceLine: {
+  gridLine: {
     position: 'absolute',
     left: 0,
     right: 0,
     height: '1px',
-    background: '#d1d5db',
-    borderStyle: 'dashed',
+    background: '#000',
+    opacity: 0.15,
+    pointerEvents: 'none',
   },
-  barColumn: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '4px',
+  averageLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: '2px',
+    background: '#2563eb',
+    zIndex: 1,
+  },
+  averageLabel: {
+    position: 'absolute',
+    right: '0',
+    top: '-16px',
+    fontSize: '10px',
+    fontWeight: 600,
+    color: '#2563eb',
+    background: '#f9fafb',
+    padding: '1px 4px',
+    borderRadius: '2px',
   },
   bar: {
     borderRadius: '4px 4px 0 0',
@@ -160,10 +211,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     marginTop: '2px',
   },
+  xAxisLabels: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: '8px',
+    paddingTop: '4px',
+  },
   barLabel: {
     fontSize: '11px',
     fontWeight: 500,
     color: '#6b7280',
+    textAlign: 'center',
   },
   legend: {
     display: 'flex',

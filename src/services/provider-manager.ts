@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { IRoutingProvider, RoutingProviderType } from './routing-provider.js';
 import { TomTomProvider } from './tomtom-provider.js';
 import { HereProvider } from './here-provider.js';
+import { GoogleProvider } from './google-provider.js';
 
 class ProviderManager {
   private providers: Map<RoutingProviderType, IRoutingProvider> = new Map();
@@ -15,6 +16,9 @@ class ProviderManager {
     }
     if (providerType === 'here' && !config.here.enabled) {
       throw new Error('HERE API is not configured. Please set HERE_API_KEY.');
+    }
+    if (providerType === 'google' && !config.google.enabled) {
+      throw new Error('Google API is not configured. Please set GOOGLE_API_KEY.');
     }
 
     // Return cached provider if available
@@ -30,6 +34,9 @@ class ProviderManager {
         break;
       case 'here':
         provider = new HereProvider();
+        break;
+      case 'google':
+        provider = new GoogleProvider();
         break;
       default:
         throw new Error(`Unknown provider type: ${providerType}`);
@@ -47,6 +54,9 @@ class ProviderManager {
     if (config.here.enabled) {
       available.push('here');
     }
+    if (config.google.enabled) {
+      available.push('google');
+    }
     return available;
   }
 
@@ -57,6 +67,7 @@ class ProviderManager {
   isProviderAvailable(type: RoutingProviderType): boolean {
     if (type === 'tomtom') return config.tomtom.enabled;
     if (type === 'here') return config.here.enabled;
+    if (type === 'google') return config.google.enabled;
     return false;
   }
 }

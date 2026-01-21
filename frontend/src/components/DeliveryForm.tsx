@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { api, AddressInput, Coordinates, GeocodedAddress, OptimizeRequest, LocationSearchResult, RoutingProvider } from '../api/client';
+import { api, AddressInput, Coordinates, GeocodedAddress, OptimizeRequest, LocationSearchResult, RoutingProvider, GoogleTrafficModel } from '../api/client';
 import AddressList from './AddressList';
 import MapView, { SelectionMode } from './MapView';
 import LocationSearch from './LocationSearch';
@@ -24,6 +24,7 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
   // Provider state
   const [availableProviders, setAvailableProviders] = useState<RoutingProvider[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<RoutingProvider | undefined>(undefined);
+  const [googleTrafficModel, setGoogleTrafficModel] = useState<GoogleTrafficModel>('best_guess');
 
   // Map state
   const [mapCenter, setMapCenter] = useState<Coordinates>(DEFAULT_CENTER);
@@ -56,15 +57,25 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
     fetchProviders();
   }, []);
 
-  // Schedule state
+  // Schedule state - default to next morning at 6:00 AM (local timezone)
   const [departureTime, setDepartureTime] = useState(() => {
     const now = new Date();
-    now.setMinutes(now.getMinutes() + 30);
-    now.setSeconds(0);
-    now.setMilliseconds(0);
-    return now.toISOString().slice(0, 16);
+    const nextMorning = new Date(now);
+    nextMorning.setHours(6, 0, 0, 0);
+    // If it's already past 6 AM today, set to tomorrow at 6 AM
+    if (now.getHours() >= 6) {
+      nextMorning.setDate(nextMorning.getDate() + 1);
+    }
+    // Format as local datetime string (YYYY-MM-DDTHH:MM)
+    const year = nextMorning.getFullYear();
+    const month = String(nextMorning.getMonth() + 1).padStart(2, '0');
+    const day = String(nextMorning.getDate()).padStart(2, '0');
+    const hours = String(nextMorning.getHours()).padStart(2, '0');
+    const minutes = String(nextMorning.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
   });
   const [deliveryDuration, setDeliveryDuration] = useState(15);
+  const [sortByTrafficDensity, setSortByTrafficDensity] = useState(false);
 
   // Processing state
   const [geocodingPending, setGeocodingPending] = useState(false);
@@ -149,6 +160,8 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
       firstDepartureTime: new Date(departureTime).toISOString(),
       deliveryDurationMinutes: deliveryDuration,
       provider: selectedProvider,
+      sortByTrafficDensity,
+      googleTrafficModel: selectedProvider === 'google' ? googleTrafficModel : undefined,
     };
 
     onSubmit(request);
@@ -164,6 +177,13 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
   const providerLabels: Record<RoutingProvider, string> = {
     tomtom: 'TomTom',
     here: 'HERE',
+    google: 'Google',
+  };
+
+  const trafficModelLabels: Record<GoogleTrafficModel, { label: string; description: string }> = {
+    best_guess: { label: 'Best Guess', description: 'Best estimate based on historical and live data' },
+    pessimistic: { label: 'Pessimistic', description: 'Longer estimates for worst-case planning' },
+    optimistic: { label: 'Optimistic', description: 'Shorter estimates assuming good conditions' },
   };
 
   return (
@@ -188,6 +208,28 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Google Traffic Model selector - only show when Google is selected */}
+      {selectedProvider === 'google' && (
+        <div style={styles.trafficModelSection}>
+          <label style={styles.label}>Traffic Model</label>
+          <select
+            value={googleTrafficModel}
+            onChange={(e) => setGoogleTrafficModel(e.target.value as GoogleTrafficModel)}
+            style={styles.select}
+            disabled={loading}
+          >
+            {(Object.keys(trafficModelLabels) as GoogleTrafficModel[]).map((model) => (
+              <option key={model} value={model}>
+                {trafficModelLabels[model].label}
+              </option>
+            ))}
+          </select>
+          <p style={styles.trafficModelHint}>
+            {trafficModelLabels[googleTrafficModel].description}
+          </p>
         </div>
       )}
 
@@ -358,6 +400,24 @@ const DeliveryForm: React.FC<DeliveryFormProps> = ({ onSubmit, loading }) => {
         </div>
       </div>
 
+      {/* Options section */}
+      <h2 style={styles.sectionTitle}>Options</h2>
+      <div style={styles.optionsSection}>
+        <label style={styles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={sortByTrafficDensity}
+            onChange={(e) => setSortByTrafficDensity(e.target.checked)}
+            style={styles.checkbox}
+            disabled={loading}
+          />
+          <span>Sort routes by traffic density (lowest first)</span>
+        </label>
+        <p style={styles.optionHint}>
+          When disabled, routes are returned in the order entered. When enabled, routes are sorted to prioritize lower traffic conditions.
+        </p>
+      </div>
+
       <button
         type="submit"
         style={{
@@ -402,6 +462,29 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#2563eb',
     color: '#fff',
     borderColor: '#2563eb',
+  },
+  trafficModelSection: {
+    marginBottom: '16px',
+  },
+  select: {
+    width: '100%',
+    padding: '10px 12px',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    background: '#fff',
+    color: '#374151',
+    fontSize: '14px',
+    cursor: 'pointer',
+    appearance: 'none',
+    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23374151' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`,
+    backgroundRepeat: 'no-repeat',
+    backgroundPosition: 'right 12px center',
+  },
+  trafficModelHint: {
+    fontSize: '12px',
+    color: '#6b7280',
+    marginTop: '6px',
+    marginBottom: '0',
   },
   modeToggle: {
     display: 'flex',
@@ -547,6 +630,28 @@ const styles: Record<string, React.CSSProperties> = {
   field: {
     display: 'flex',
     flexDirection: 'column',
+  },
+  optionsSection: {
+    marginBottom: '24px',
+  },
+  checkboxLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    color: '#374151',
+  },
+  checkbox: {
+    width: '18px',
+    height: '18px',
+    cursor: 'pointer',
+  },
+  optionHint: {
+    fontSize: '12px',
+    color: '#6b7280',
+    marginTop: '8px',
+    marginLeft: '26px',
   },
   submitButton: {
     width: '100%',
