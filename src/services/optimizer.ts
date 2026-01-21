@@ -31,6 +31,51 @@ interface RoundTripRoute {
 }
 
 export class DeliveryOptimizer {
+  /**
+   * Calculate round-trip route for a target at a given departure time
+   */
+  private async calculateRoundTrip(
+    provider: IRoutingProvider,
+    depotGeocoded: GeocodedAddress,
+    target: GeocodedAddress,
+    departureTime: string,
+    deliveryDurationMinutes: number,
+    googleTrafficModel?: GoogleTrafficModel
+  ): Promise<RoundTripRoute> {
+    // Calculate outbound route (depot → target)
+    const outboundRoute = await provider.calculateRoute({
+      origin: depotGeocoded,
+      destination: target,
+      departureTime,
+      googleTrafficModel,
+    });
+
+    // Calculate return departure time (arrival + unloading)
+    const outboundArrival = new Date(outboundRoute.arrivalTime);
+    const returnDepartureTime = new Date(
+      outboundArrival.getTime() + deliveryDurationMinutes * 60 * 1000
+    );
+
+    // Calculate return route (target → depot)
+    const returnRoute = await provider.calculateRoute({
+      origin: target,
+      destination: depotGeocoded,
+      departureTime: returnDepartureTime.toISOString(),
+      googleTrafficModel,
+    });
+
+    // Calculate round-trip traffic density (average of both legs)
+    const roundTripTrafficDensity =
+      (outboundRoute.trafficDensity + returnRoute.trafficDensity) / 2;
+
+    return {
+      target,
+      outboundRoute,
+      returnRoute,
+      roundTripTrafficDensity: Math.round(roundTripTrafficDensity * 1000) / 1000,
+    };
+  }
+
   async optimize(options: OptimizeOptions): Promise<DeliveryPlan> {
     const {
       depot,
@@ -63,107 +108,110 @@ export class DeliveryOptimizer {
       targetAddresses.push(geocodedTarget);
     }
 
-    // Step 2: Calculate round-trip routes (depot→target and target→depot) at first departure time
-    // For initial sorting, estimate return departure as: departure + outbound travel + delivery duration
-    const roundTripRoutes: RoundTripRoute[] = [];
-
-    for (const target of targetAddresses) {
-      // Calculate outbound route (depot → target)
-      const outboundRoute = await provider.calculateRoute({
-        origin: depotGeocoded,
-        destination: target,
-        departureTime: firstDepartureTime,
-        googleTrafficModel,
-      });
-
-      // Estimate return departure time
-      const outboundArrival = new Date(outboundRoute.arrivalTime);
-      const returnDepartureTime = new Date(
-        outboundArrival.getTime() + deliveryDurationMinutes * 60 * 1000
-      );
-
-      // Calculate return route (target → depot)
-      const returnRoute = await provider.calculateRoute({
-        origin: target,
-        destination: depotGeocoded,
-        departureTime: returnDepartureTime.toISOString(),
-        googleTrafficModel,
-      });
-
-      // Calculate round-trip traffic density (average of both legs)
-      const roundTripTrafficDensity =
-        (outboundRoute.trafficDensity + returnRoute.trafficDensity) / 2;
-
-      roundTripRoutes.push({
-        target,
-        outboundRoute,
-        returnRoute,
-        roundTripTrafficDensity: Math.round(roundTripTrafficDensity * 1000) / 1000,
-      });
-    }
-
-    // Step 3: Optionally sort targets by round-trip traffic density (lowest first)
-    if (sortByTrafficDensity) {
-      roundTripRoutes.sort((a, b) => a.roundTripTrafficDensity - b.roundTripTrafficDensity);
-    }
-
-    // Step 4: Build optimized delivery sequence with recalculated times
     const deliveries: OptimizedDelivery[] = [];
     let currentDepartureTime = new Date(firstDepartureTime);
 
-    for (let i = 0; i < roundTripRoutes.length; i++) {
-      const { target } = roundTripRoutes[i];
+    if (sortByTrafficDensity) {
+      // Greedy re-optimization: recalculate all remaining routes after each selection
+      // This produces better results because traffic conditions change throughout the day
+      const remainingTargets = [...targetAddresses];
 
-      // Recalculate outbound route with actual departure time
-      const outboundRoute = await provider.calculateRoute({
-        origin: depotGeocoded,
-        destination: target,
-        departureTime: currentDepartureTime.toISOString(),
-        googleTrafficModel,
-      });
+      while (remainingTargets.length > 0) {
+        // Calculate routes for all remaining targets at current departure time
+        const candidates: RoundTripRoute[] = [];
+        for (const target of remainingTargets) {
+          const roundTrip = await this.calculateRoundTrip(
+            provider,
+            depotGeocoded,
+            target,
+            currentDepartureTime.toISOString(),
+            deliveryDurationMinutes,
+            googleTrafficModel
+          );
+          candidates.push(roundTrip);
+        }
 
-      const departureTime = new Date(currentDepartureTime);
-      const arrivalTime = new Date(outboundRoute.arrivalTime);
+        // Select the candidate with shortest round-trip travel time
+        // This favors time savings over density - completing faster deliveries first
+        // gets the driver back to the depot sooner for subsequent deliveries
+        candidates.sort((a, b) => {
+          const aTotalTime = a.outboundRoute.travelTimeSeconds + a.returnRoute.travelTimeSeconds;
+          const bTotalTime = b.outboundRoute.travelTimeSeconds + b.returnRoute.travelTimeSeconds;
+          return aTotalTime - bTotalTime;
+        });
+        const selected = candidates[0];
 
-      // Calculate delivery end time
-      const deliveryEndTime = new Date(
-        arrivalTime.getTime() + deliveryDurationMinutes * 60 * 1000
-      );
+        // Remove selected target from remaining
+        const selectedIndex = remainingTargets.findIndex(
+          (t) => t.address === selected.target.address
+        );
+        remainingTargets.splice(selectedIndex, 1);
 
-      // Recalculate return route with actual departure time
-      const returnRoute = await provider.calculateRoute({
-        origin: target,
-        destination: depotGeocoded,
-        departureTime: deliveryEndTime.toISOString(),
-        googleTrafficModel,
-      });
+        // Build the delivery record
+        const departureTime = new Date(currentDepartureTime);
+        const arrivalTime = new Date(selected.outboundRoute.arrivalTime);
+        const returnTime = new Date(selected.returnRoute.arrivalTime);
 
-      const returnTime = new Date(returnRoute.arrivalTime);
+        const deliveryTarget: DeliveryTarget = {
+          address: selected.target,
+          deliveryDurationMinutes,
+        };
 
-      // Calculate actual round-trip traffic density
-      const roundTripTrafficDensity =
-        (outboundRoute.trafficDensity + returnRoute.trafficDensity) / 2;
+        const optimizedDelivery: OptimizedDelivery = {
+          order: deliveries.length + 1,
+          target: deliveryTarget,
+          route: selected.outboundRoute,
+          returnRoute: selected.returnRoute,
+          roundTripTrafficDensity: selected.roundTripTrafficDensity,
+          estimatedDepartureTime: departureTime.toISOString(),
+          estimatedArrivalTime: arrivalTime.toISOString(),
+          estimatedReturnTime: returnTime.toISOString(),
+        };
 
-      const deliveryTarget: DeliveryTarget = {
-        address: target,
-        deliveryDurationMinutes,
-      };
+        deliveries.push(optimizedDelivery);
 
-      const optimizedDelivery: OptimizedDelivery = {
-        order: i + 1,
-        target: deliveryTarget,
-        route: outboundRoute,
-        returnRoute: returnRoute,
-        roundTripTrafficDensity: Math.round(roundTripTrafficDensity * 1000) / 1000,
-        estimatedDepartureTime: departureTime.toISOString(),
-        estimatedArrivalTime: arrivalTime.toISOString(),
-        estimatedReturnTime: returnTime.toISOString(),
-      };
+        // Update departure time for next iteration
+        currentDepartureTime = returnTime;
+      }
+    } else {
+      // No optimization: process targets in original order
+      for (let i = 0; i < targetAddresses.length; i++) {
+        const target = targetAddresses[i];
 
-      deliveries.push(optimizedDelivery);
+        const roundTrip = await this.calculateRoundTrip(
+          provider,
+          depotGeocoded,
+          target,
+          currentDepartureTime.toISOString(),
+          deliveryDurationMinutes,
+          googleTrafficModel
+        );
 
-      // Update current departure time for next delivery (after return to depot)
-      currentDepartureTime = returnTime;
+        const departureTime = new Date(currentDepartureTime);
+        const arrivalTime = new Date(roundTrip.outboundRoute.arrivalTime);
+        const returnTime = new Date(roundTrip.returnRoute.arrivalTime);
+
+        const deliveryTarget: DeliveryTarget = {
+          address: target,
+          deliveryDurationMinutes,
+        };
+
+        const optimizedDelivery: OptimizedDelivery = {
+          order: i + 1,
+          target: deliveryTarget,
+          route: roundTrip.outboundRoute,
+          returnRoute: roundTrip.returnRoute,
+          roundTripTrafficDensity: roundTrip.roundTripTrafficDensity,
+          estimatedDepartureTime: departureTime.toISOString(),
+          estimatedArrivalTime: arrivalTime.toISOString(),
+          estimatedReturnTime: returnTime.toISOString(),
+        };
+
+        deliveries.push(optimizedDelivery);
+
+        // Update departure time for next delivery
+        currentDepartureTime = returnTime;
+      }
     }
 
     // Step 5: Calculate totals (including both outbound and return trips)

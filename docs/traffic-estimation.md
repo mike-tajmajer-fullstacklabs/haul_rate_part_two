@@ -474,98 +474,93 @@ Minimize cumulative round-trip traffic density across all deliveries to reduce t
 
 1. **Geocode Addresses**: Convert depot and target addresses to coordinates
 
-2. **Calculate Initial Round-Trip Routes**: For each target at the first departure time:
-   - Calculate outbound route (depot → target)
-   - Estimate return departure (arrival + unloading duration)
-   - Calculate return route (target → depot)
+2. **Build Delivery Sequence**: Process depends on optimization setting:
+   - **Without optimization**: Process targets in original order
+   - **With optimization**: Use greedy re-optimization (see below)
+
+3. **For Each Delivery**:
+   - Calculate outbound route (depot → target) at current departure time
+   - Calculate return route (target → depot) at arrival + unloading time
    - Compute round-trip traffic density (average of both legs)
-
-3. **Sort by Round-Trip Density**: Order targets from lowest to highest round-trip density
-   - Delivers to low-traffic round trips first
-   - Pushes high-traffic round trips to potentially better times
-
-4. **Recalculate with Actual Timing**: For each delivery in sorted order:
-   - Calculate outbound route at actual departure time
-   - Calculate return route at estimated return departure time
    - Update next departure = return arrival time
-   - Update cumulative metrics (distance, time, density)
 
-5. **Return Optimized Plan**: Ordered list with:
+4. **Return Delivery Plan**: Ordered list with:
    - Outbound and return routes for each delivery
    - Departure, arrival, and return times
    - Round-trip density for each delivery
    - Total and average metrics across all deliveries
 
-### Sorting Logic Explained
+### Greedy Re-Optimization Algorithm
 
-**Why sort by lowest density first?**
+When optimization is enabled, the system uses a **greedy re-optimization** approach that recalculates all remaining routes after each delivery is selected. The algorithm **favors time savings** by selecting the route with the shortest total travel time at each step.
 
-1. **Early slots are fixed**: The first departure time is set by the user and cannot be shifted
-2. **Low-density routes are time-insensitive**: Routes with little traffic impact can be done anytime
-3. **High-density routes may improve**: By pushing congested routes later, they may encounter:
-   - Post-rush-hour conditions (if starting during rush hour)
-   - Midday lull between morning and evening peaks
-   - Different traffic patterns at different times
-
-**Example scenario** (8:00 AM start, 3 deliveries):
-
-| Target | Round-Trip Density at 8 AM | Sorted Order |
-|--------|---------------------------|--------------|
-| A | 1.65 (heavy) | 3rd |
-| B | 1.12 (light) | 1st |
-| C | 1.38 (moderate) | 2nd |
-
-Execution order: B → C → A
-
-- **B** (8:00 AM): Light traffic, done quickly, return ~9:00 AM
-- **C** (9:00 AM): Moderate traffic, return ~10:15 AM
-- **A** (10:15 AM): Originally heavy at 8 AM, but 10 AM may be post-rush with better conditions
-
-### Two-Phase Computation: Why Routes Are Recalculated
-
-The optimization uses a **two-phase approach** because traffic density varies by time of day:
-
-#### Phase 1: Initial Sorting (All at First Departure Time)
-
-All routes are calculated assuming departure at the user-specified first departure time. This provides a baseline for sorting:
+#### How It Works
 
 ```
-All targets calculated at 8:00 AM departure:
-  Target A: density 1.65
-  Target B: density 1.12
-  Target C: density 1.38
+Start: 5 destinations, current time = 8:00 AM
 
-Sorted order: B, C, A (lowest density first)
+Round 1: Calculate routes for all 5 destinations at 8:00 AM
+  → Select shortest travel time (Destination B: 45 min round-trip)
+  → Return time: 9:00 AM
+
+Round 2: Calculate routes for remaining 4 destinations at 9:00 AM
+  → Select shortest travel time (Destination D: 52 min round-trip)
+  → Return time: 10:07 AM
+
+Round 3: Calculate routes for remaining 3 destinations at 10:07 AM
+  → Select shortest travel time (Destination A: 48 min round-trip)
+  → Return time: 11:10 AM
+
+... continue until all destinations assigned
 ```
 
-#### Phase 2: Recalculation with Actual Departure Times
+#### Why Favor Time Savings?
 
-After sorting, each route is **recalculated using the actual departure time** for that delivery. This is critical because:
+By selecting the fastest round-trip at each step:
 
-1. **Traffic patterns change throughout the day**: A route with density 1.65 at 8:00 AM might have density 1.25 at 10:15 AM
-2. **Return trips happen at different times**: The return leg departs after unloading, which could be during different traffic conditions
-3. **Cumulative timing matters**: Each delivery's return time becomes the next delivery's departure time
+1. **Earlier returns**: The driver gets back to the depot sooner
+2. **More deliveries per day**: Completing fast trips first maximizes throughput
+3. **Adapts to conditions**: Traffic changes throughout the day; recalculating ensures each selection reflects current conditions
 
-```
-Phase 2 recalculation:
-  Delivery 1 (Target B): Depart 8:00 AM → recalculate route → return 9:00 AM
-  Delivery 2 (Target C): Depart 9:00 AM → recalculate route → return 10:15 AM
-  Delivery 3 (Target A): Depart 10:15 AM → recalculate route → return 11:30 AM
-```
+**Example**: Consider 3 destinations at 8:00 AM start:
 
-**Why not just use Phase 1 results?**
+| Destination | Round-Trip Time at 8:00 AM | Round-Trip Time at 10:00 AM |
+|-------------|---------------------------|----------------------------|
+| A (downtown) | 85 min (heavy traffic) | 55 min (post-rush) |
+| B (nearby) | 45 min (short distance) | 50 min (school traffic) |
+| C (highway) | 70 min (moderate) | 65 min (moderate) |
 
-The Phase 1 calculation assumes all deliveries depart at 8:00 AM, which is physically impossible for sequential deliveries. Phase 2 provides accurate timing and traffic predictions for when each delivery actually occurs.
+**Greedy by time savings**:
+- 8:00 AM: B is fastest (45 min) → select B, return 9:00 AM
+- 9:00 AM: Recalculate A and C → A is now 60 min, C is 68 min → select A, return 10:15 AM
+- 10:15 AM: Only C remains (65 min) → select C, return 11:35 AM
 
-**Example of density change due to recalculation:**
+**Total time**: 3 hours 35 minutes
 
-| Target | Phase 1 (8:00 AM) | Phase 2 (Actual Time) | Change |
-|--------|-------------------|----------------------|--------|
-| B | 1.12 | 1.12 (8:00 AM) | Same |
-| C | 1.38 | 1.28 (9:00 AM) | Improved |
-| A | 1.65 | 1.22 (10:15 AM) | Significantly improved |
+**Without optimization** (original order A → B → C):
+- A at 8:00 AM: 85 min → return 9:40 AM
+- B at 9:40 AM: 48 min → return 10:43 AM
+- C at 10:43 AM: 66 min → return 12:04 PM
 
-In this example, Target A benefits most from being pushed later—its density drops from 1.65 to 1.22 because 10:15 AM is past the morning rush hour.
+**Total time**: 4 hours 4 minutes
+
+**Time saved**: 29 minutes by optimizing for shortest travel time.
+
+#### Route Calculations
+
+| Approach | Destinations | Route Calculations |
+|----------|--------------|-------------------|
+| No optimization | N | 2N (one round-trip per destination) |
+| Greedy optimization | N | N + (N-1) + (N-2) + ... + 1 = N(N+1)/2 round-trips |
+
+**Example for 5 destinations**:
+
+| Approach | Calculation | Total Routes |
+|----------|-------------|--------------|
+| No optimization | 5 × 2 | **10** |
+| Greedy optimization | 5+4+3+2+1 = 15 round-trips × 2 | **30** |
+
+The greedy approach uses more API calls but produces better optimization by accounting for how traffic changes throughout the day.
 
 ### Why This Works
 
@@ -660,123 +655,143 @@ This means:
 
 For an optimization with **N delivery targets** (hub-and-spoke round-trip model):
 
-| Operation | API Calls | Notes |
-|-----------|-----------|-------|
-| Geocode depot | 1 | Cached after first use |
-| Geocode targets | N | Cached after first use |
-| Initial outbound routes (depot→target) | N | For initial sorting |
-| Initial return routes (target→depot) | N | For round-trip density calculation |
-| Recalculated outbound routes | N | With actual departure times |
-| Recalculated return routes | N | With actual return departure times |
+| Mode | Geocoding | Route Calculations | Total |
+|------|-----------|-------------------|-------|
+| No optimization | 1 + N | 2N | **1 + 3N** |
+| Greedy optimization | 1 + N | N(N+1) | **1 + N + N(N+1)** |
 
-**Total per optimization**: ~1 + N + N + N + N + N = **1 + 5N calls** (worst case, no cache)
+**Route calculation formula for greedy optimization**:
+- Round 1: Calculate N round-trips (2N routes)
+- Round 2: Calculate N-1 round-trips (2(N-1) routes)
+- Round 3: Calculate N-2 round-trips...
+- Total: 2 × (N + N-1 + N-2 + ... + 1) = 2 × N(N+1)/2 = **N(N+1) routes**
 
 ### Typical Solution Example: 5 Delivery Targets
 
-Here's a detailed breakdown of API calls for a typical optimization with **1 depot and 5 delivery targets**, starting at 8:00 AM with 15-minute unloading time per stop:
+#### Without Optimization (10 route calls)
 
-#### Phase 1: Geocoding (6 calls)
+| Operation | API Calls |
+|-----------|-----------|
+| Geocoding (depot + 5 targets) | 6 |
+| Route calculations (5 × 2 routes) | 10 |
+| **Total** | **16** |
 
-| Call # | Operation | Input | Cached? |
-|--------|-----------|-------|---------|
-| 1 | Geocode depot | "123 Main St, Los Angeles, CA" | No (first run) |
-| 2 | Geocode target 1 | "456 Oak Ave, Pasadena, CA" | No |
-| 3 | Geocode target 2 | "789 Pine St, Glendale, CA" | No |
-| 4 | Geocode target 3 | "321 Elm Dr, Burbank, CA" | No |
-| 5 | Geocode target 4 | "654 Cedar Ln, Santa Monica, CA" | No |
-| 6 | Geocode target 5 | "987 Maple Rd, Long Beach, CA" | No |
+#### With Greedy Optimization (30 route calls)
 
-#### Phase 2: Initial Round-Trip Routes for Sorting (10 calls)
+| Round | Time | Remaining | Route Calculations |
+|-------|------|-----------|-------------------|
+| 1 | 8:00 AM | 5 targets | 10 routes (5 round-trips) |
+| 2 | 9:15 AM | 4 targets | 8 routes (4 round-trips) |
+| 3 | 10:30 AM | 3 targets | 6 routes (3 round-trips) |
+| 4 | 11:45 AM | 2 targets | 4 routes (2 round-trips) |
+| 5 | 1:00 PM | 1 target | 2 routes (1 round-trip) |
+| **Total** | | | **30 routes** |
 
-All calculated at 8:00 AM departure to determine sort order:
+Plus 6 geocoding calls = **36 total API calls**
 
-| Call # | Operation | Route | Result |
-|--------|-----------|-------|--------|
-| 7 | Route | Depot → Target 1 | Density: 1.45 |
-| 8 | Route | Target 1 → Depot | Density: 1.38 |
-| 9 | Route | Depot → Target 2 | Density: 1.12 |
-| 10 | Route | Target 2 → Depot | Density: 1.18 |
-| 11 | Route | Depot → Target 3 | Density: 1.55 |
-| 12 | Route | Target 3 → Depot | Density: 1.62 |
-| 13 | Route | Depot → Target 4 | Density: 1.28 |
-| 14 | Route | Target 4 → Depot | Density: 1.35 |
-| 15 | Route | Depot → Target 5 | Density: 1.72 |
-| 16 | Route | Target 5 → Depot | Density: 1.68 |
+#### Greedy Optimization Walkthrough
 
-**Round-trip densities calculated:**
-- Target 1: (1.45 + 1.38) / 2 = 1.42
-- Target 2: (1.12 + 1.18) / 2 = **1.15** ← Lowest, deliver first
-- Target 3: (1.55 + 1.62) / 2 = 1.59
-- Target 4: (1.28 + 1.35) / 2 = **1.32** ← Second
-- Target 5: (1.72 + 1.68) / 2 = 1.70 ← Highest, deliver last
+**Round 1** (8:00 AM) - Calculate all 5 targets:
 
-**Sorted order:** Target 2 → Target 4 → Target 1 → Target 3 → Target 5
+| Target | Round-Trip Time | Density |
+|--------|-----------------|---------|
+| Target 1 | 72 min | 1.42 |
+| Target 2 | **38 min** ← Selected (fastest) | 1.15 |
+| Target 3 | 85 min | 1.59 |
+| Target 4 | 55 min | 1.32 |
+| Target 5 | 95 min | 1.70 |
 
-#### Phase 3: Recalculate Routes with Actual Departure Times (10 calls)
+→ Select Target 2 (fastest), return at 8:53 AM
 
-| Call # | Delivery | Depart | Operation | Notes |
-|--------|----------|--------|-----------|-------|
-| 17 | 1st (Target 2) | 8:00 AM | Depot → Target 2 | Same as Phase 2 |
-| 18 | 1st (Target 2) | 8:25 AM | Target 2 → Depot | After 25 min travel + 15 min unload |
-| 19 | 2nd (Target 4) | 9:05 AM | Depot → Target 4 | After return from Target 2 |
-| 20 | 2nd (Target 4) | 9:45 AM | Target 4 → Depot | Different traffic than 8 AM |
-| 21 | 3rd (Target 1) | 10:30 AM | Depot → Target 1 | Post-rush hour |
-| 22 | 3rd (Target 1) | 11:00 AM | Target 1 → Depot | Midday traffic |
-| 23 | 4th (Target 3) | 11:40 AM | Depot → Target 3 | Midday traffic |
-| 24 | 4th (Target 3) | 12:15 PM | Target 3 → Depot | Lunch hour |
-| 25 | 5th (Target 5) | 12:55 PM | Depot → Target 5 | Early afternoon |
-| 26 | 5th (Target 5) | 1:40 PM | Target 5 → Depot | Afternoon traffic |
+**Round 2** (8:53 AM) - Recalculate remaining 4 targets:
 
-#### Summary
+| Target | Round-Trip Time | Density |
+|--------|-----------------|---------|
+| Target 1 | 65 min | 1.28 |
+| Target 3 | 78 min | 1.45 |
+| Target 4 | **50 min** ← Selected (fastest) | 1.22 |
+| Target 5 | 88 min | 1.55 |
 
-| Phase | API Calls | Purpose |
-|-------|-----------|---------|
-| Geocoding | 6 | Convert addresses to coordinates |
-| Initial routes | 10 | Calculate round-trip density for sorting |
-| Recalculated routes | 10 | Accurate timing with actual departures |
-| **Total** | **26** | Complete optimization |
+→ Select Target 4 (fastest), return at 9:58 AM
 
-**Cost per provider (26 calls):**
-- **TomTom**: 26 × $0.00075 = **$0.020** (or free within 2,500/day limit)
-- **HERE**: 26 × $0.00049 = **$0.013** (or free within ~8,300/day limit)
-- **Google**: 26 × $0.005 = **$0.130** (or free within $200/month credit)
+**Round 3** (9:58 AM) - Recalculate remaining 3 targets:
+
+| Target | Round-Trip Time | Density |
+|--------|-----------------|---------|
+| Target 1 | **58 min** ← Selected (fastest) | 1.18 |
+| Target 3 | 70 min | 1.32 |
+| Target 5 | 80 min | 1.38 |
+
+→ Select Target 1 (fastest), return at 11:11 AM
+
+**Round 4** (11:11 AM) - Recalculate remaining 2 targets:
+
+| Target | Round-Trip Time | Density |
+|--------|-----------------|---------|
+| Target 3 | **62 min** ← Selected (fastest) | 1.25 |
+| Target 5 | 75 min | 1.30 |
+
+→ Select Target 3 (fastest), return at 12:28 PM
+
+**Round 5** (12:28 PM) - Only Target 5 remains:
+
+→ Select Target 5, return at 1:40 PM
+
+**Final order**: Target 2 → Target 4 → Target 1 → Target 3 → Target 5
+
+**Total time**: 5 hours 40 minutes (8:00 AM to 1:40 PM)
+
+Note how the algorithm always picks the fastest option at each decision point, and travel times change based on time of day (Target 1 improved from 72 min to 58 min as rush hour ended).
+
+### API Call Summary by Scenario
+
+| Scenario | Targets | No Optimization | Greedy Optimization |
+|----------|---------|-----------------|---------------------|
+| Small | 5 | 16 calls | 36 calls |
+| Medium | 10 | 31 calls | 116 calls |
+| Large | 20 | 61 calls | 426 calls |
+
+### Cost per Run (5 Targets)
+
+| Mode | API Calls | TomTom | HERE | Google |
+|------|-----------|--------|------|--------|
+| No optimization | 16 | $0.012 | $0.008 | $0.080 |
+| Greedy optimization | 36 | $0.027 | $0.018 | $0.180 |
 
 **With caching on subsequent runs:**
 - Geocoding: 0 calls (cached)
-- Routes with same times: 0 calls (cached)
+- Routes with same departure times: 0 calls (cached)
 - **Re-run cost: $0** if inputs unchanged
 
 ### Example Cost Calculations
 
 #### TomTom Costs
 
-| Scenario | Targets | API Calls (1+5N) | Free Tier Runs/Day | Paid Cost/Run |
-|----------|---------|------------------|-------------------|---------------|
-| Small batch | 5 | ~26 | 96/day | $0.020 |
-| Medium batch | 10 | ~51 | 49/day | $0.038 |
-| Large batch | 20 | ~101 | 24/day | $0.076 |
-| Max batch | 50 | ~251 | 9/day | $0.188 |
+| Scenario | Targets | No Optimization | Greedy Optimization | Free Tier Runs/Day |
+|----------|---------|-----------------|---------------------|-------------------|
+| Small | 5 | 16 calls / $0.012 | 36 calls / $0.027 | 69-156/day |
+| Medium | 10 | 31 calls / $0.023 | 116 calls / $0.087 | 21-80/day |
+| Large | 20 | 61 calls / $0.046 | 426 calls / $0.320 | 5-40/day |
 
 *TomTom pricing: ~$0.75 per 1,000 requests. Free tier: 2,500 requests/day.*
 
 #### HERE Costs
 
-| Scenario | Targets | API Calls (1+5N) | Free Tier Runs/Day | Paid Cost/Run |
-|----------|---------|------------------|-------------------|---------------|
-| Small batch | 5 | ~26 | 319/day | $0.013 |
-| Medium batch | 10 | ~51 | 162/day | $0.025 |
-| Large batch | 20 | ~101 | 82/day | $0.049 |
-| Max batch | 50 | ~251 | 33/day | $0.123 |
+| Scenario | Targets | No Optimization | Greedy Optimization | Free Tier Runs/Day |
+|----------|---------|-----------------|---------------------|-------------------|
+| Small | 5 | 16 calls / $0.008 | 36 calls / $0.018 | 230-518/day |
+| Medium | 10 | 31 calls / $0.015 | 116 calls / $0.057 | 71-267/day |
+| Large | 20 | 61 calls / $0.030 | 426 calls / $0.209 | 19-136/day |
 
 *HERE pricing: ~$0.49 per 1,000 transactions. Free tier: 250,000/month (~8,300/day).*
 
 #### Google Costs
 
-| Scenario | Targets | API Calls (1+5N) | $200 Credit Runs/Month | Paid Cost/Run |
-|----------|---------|------------------|------------------------|---------------|
-| Small batch | 5 | ~26 | ~1,538/month | $0.130 |
-| Medium batch | 10 | ~51 | ~784/month | $0.255 |
-| Large batch | 20 | ~101 | ~396/month | $0.505 |
+| Scenario | Targets | No Optimization | Greedy Optimization | $200 Credit Runs/Month |
+|----------|---------|-----------------|---------------------|------------------------|
+| Small | 5 | 16 calls / $0.080 | 36 calls / $0.180 | 1,111-2,500/month |
+| Medium | 10 | 31 calls / $0.155 | 116 calls / $0.580 | 344-1,290/month |
+| Large | 20 | 61 calls / $0.305 | 426 calls / $2.130 | 93-655/month |
 | Max batch | 50 | ~251 | ~159/month | $1.255 |
 
 *Google pricing: $5.00 per 1,000 requests (Directions/Geocoding). Free tier: $200/month credit.*
