@@ -185,10 +185,13 @@ export class DeliveryOptimizer {
     );
     // Average traffic density = total travel time / total free-flow time
     // This is a time-weighted average that reflects the true overall traffic impact
-    const averageTrafficDensity =
+    // Clamp to minimum 1.0 because Google's baseline is historical average (not free-flow),
+    // which can result in values < 1.0 when conditions are better than typical
+    const rawAverageTrafficDensity =
       totalNoTrafficTravelTimeSeconds > 0
         ? totalTravelTimeSeconds / totalNoTrafficTravelTimeSeconds
         : 1;
+    const averageTrafficDensity = Math.max(1.0, rawAverageTrafficDensity);
 
     // Determine day type
     const departureDate = new Date(firstDepartureTime);
